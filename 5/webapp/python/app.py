@@ -108,9 +108,8 @@ def current_user():
         user_id = get_session_user_id()
         if user_id:
             query = "SELECT id, account_name, nick_name, email FROM users WHERE id = %s"
-            bottle.request.user = db_fetchone(query, get_session_user_id())
+            bottle.request.user = db_fetchone(query, user_id)
             if not bottle.request.user:
-                set_session_user_id(None)
                 abort_authentication_error()
         else:
             bottle.request.user = None
@@ -184,21 +183,21 @@ def get_logout():
 @app.get("/")
 def get_index():
     authenticated()
-    
+
     profile = db_fetchone("SELECT * FROM profiles WHERE user_id = %s", current_user()["id"])
-    
+
     query = "SELECT * FROM entries WHERE user_id = %s ORDER BY created_at LIMIT 5"
     entries = db_fetchall(query, current_user()["id"])
     for entry in entries:
         entry["is_private"] = entry["private"] == 1
         entry["title"], entry["content"] = entry["body"].split("\n", 1)
-    
+
     comments_for_me_query = "SELECT c.id AS id, c.entry_id AS entry_id, c.user_id AS user_id, " \
                             " c.comment AS comment, c.created_at AS created_at " \
                             "FROM comments c JOIN entries e ON c.entry_id = e.id " \
                             "WHERE e.user_id = %s ORDER BY c.created_at DESC LIMIT 10"
     comments_for_me = db_fetchall(comments_for_me_query, current_user()["id"])
-    
+
     entries_of_friends = []
     with db().cursor() as cursor:
         cursor.execute("SELECT * FROM entries ORDER BY created_at DESC LIMIT 1000")
@@ -209,7 +208,7 @@ def get_index():
             entries_of_friends.append(entry)
             if len(entries_of_friends) >= 10:
                 break
-    
+
     comments_of_friends = []
     with db().cursor() as cursor:
         cursor.execute("SELECT * FROM comments ORDER BY created_at DESC LIMIT 1000")
@@ -223,7 +222,7 @@ def get_index():
             comments_of_friends.append(comment)
             if len(comments_of_friends) >= 10:
                 break
-    
+
     friends_map = {}
     with db().cursor() as cursor:
         cursor.execute("SELECT * FROM relations WHERE one = %s OR another = %s ORDER BY created_at DESC",
@@ -232,7 +231,7 @@ def get_index():
             key = "another" if relation["one"] == current_user()["id"] else "one"
             friends_map.setdefault(relation[key], relation["created_at"])
     friends = list(friends_map.items())
-    
+
     query = "SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated " \
             "FROM footprints " \
             "WHERE user_id = %s " \
@@ -240,7 +239,7 @@ def get_index():
             "ORDER BY updated DESC " \
             "LIMIT 10"
     footprints = db_fetchall(query, current_user()["id"])
-    
+
     return bottle.template("index", {
       "owner": current_user(),
       "profile": profile or {},
@@ -314,7 +313,7 @@ def get_entries(account_name):
     mark_footprint(owner["id"])
     return bottle.template("entries", {
         "owner": get_user(owner["id"]),
-        "entries": entries, 
+        "entries": entries,
         "myself": current_user()["id"] == owner["id"],
     })
 
@@ -439,7 +438,7 @@ bottle.BaseTemplate.defaults = {
 if __name__ == "__main__":
     app.run(server="wsgiref",
             host="127.0.0.1",
-            port=8080,
+            port=8081,
             reloader=True,
             quiet=False,
             debug=True)

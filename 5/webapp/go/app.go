@@ -3,12 +3,9 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"github.com/go-sql-driver/mysql"
-	"github.com/gorilla/context"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -16,6 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/gorilla/context"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 )
 
 var (
@@ -713,13 +715,24 @@ func PostFriends(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetInitialize(w http.ResponseWriter, r *http.Request) {
-	db.Exec("DELETE FROM relations WHERE id > 500000")
-	db.Exec("DELETE FROM footprints WHERE id > 500000")
-	db.Exec("DELETE FROM entries WHERE id > 500000")
-	db.Exec("DELETE FROM comments WHERE id > 1500000")
+	c := make(chan struct{}, 4)
+	go func() { db.Exec("DELETE FROM relations WHERE id > 500000"); c <- struct{}{} }()
+	go func() { db.Exec("DELETE FROM footprints WHERE id > 500000"); c <- struct{}{} }()
+	go func() { db.Exec("DELETE FROM entries WHERE id > 500000"); c <- struct{}{} }()
+	go func() { db.Exec("DELETE FROM comments WHERE id > 1500000"); c <- struct{}{} }()
+	<-c
+	<-c
+	<-c
+	<-c
+	// db.Exec("DELETE FROM relations WHERE id > 500000")
+	// db.Exec("DELETE FROM footprints WHERE id > 500000")
+	// db.Exec("DELETE FROM entries WHERE id > 500000")
+	// db.Exec("DELETE FROM comments WHERE id > 1500000")
 }
 
 func main() {
+	runtime.GOMAXPROCS(4)
+
 	host := os.Getenv("ISUCON5_DB_HOST")
 	if host == "" {
 		host = "localhost"
@@ -780,7 +793,15 @@ func main() {
 	r.HandleFunc("/initialize", myHandler(GetInitialize))
 	r.HandleFunc("/", myHandler(GetIndex))
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../static")))
-	log.Fatal(http.ListenAndServe(":8080", r))
+
+	// FIXME: change perm
+	// lll, _ := net.Listen("unix", "/tmp/isucon_go.sock")
+	lll, _ := net.ListenUnix("unix", &net.UnixAddr{"/tmp/isucon_go.sock", "unix"})
+	defer os.Remove("/tmp/isucon_go.sock")
+	// log.Fatal(http.Serve(lll, r))
+	log.Fatal(http.Serve(lll, r))
+
+	// log.Fatal(http.ListenAndServe(":8080", r))
 }
 
 func checkErr(err error) {

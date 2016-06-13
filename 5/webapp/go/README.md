@@ -7,8 +7,8 @@ Goの実行環境は `/home/isucon/.local/go/` にインストールされてい
 イメージ起動時点では
 
 ```
-GOROOT=/home/isucon/.local/go
-GOPATH=/home/isucon/webapp/go
+export GOROOT=/home/isucon/.local/go
+export GOPATH=/home/isucon/webapp/go
 ```
 
 となっています。
