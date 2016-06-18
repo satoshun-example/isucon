@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/martini-contrib/sessions"
+	"github.com/gorilla/sessions"
 )
 
 func getEnv(key string, def string) string {
@@ -18,15 +18,13 @@ func getEnv(key string, def string) string {
 	return v
 }
 
-func getFlash(session sessions.Session, key string) string {
-	value := session.Get(key)
-
-	if value == nil {
-		return ""
+func getFlash(session *sessions.Session, key string) string {
+	if value, ok := session.Values[key]; ok {
+		delete(session.Values, key)
+		return value.(string)
 	}
 
-	session.Delete(key)
-	return value.(string)
+	return ""
 }
 
 func calcPassHash(password, hash string) string {

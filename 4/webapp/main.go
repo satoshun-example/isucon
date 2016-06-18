@@ -12,11 +12,12 @@ import (
 
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/sessions"
 	"github.com/martini-contrib/render"
-	"github.com/martini-contrib/sessions"
 )
 
 var db *sql.DB
+var store = sessions.NewCookieStore([]byte("secret-isucon"))
 var (
 	userLockThreshold int
 	iPBanThreshold    int
@@ -55,19 +56,21 @@ func main() {
 
 	m := martini.Classic()
 
-	store := sessions.NewCookieStore([]byte("secret-isucon"))
-	m.Use(sessions.Sessions("isucon_go_session", store))
-
 	m.Use(render.Renderer(render.Options{
 		Layout: "layout",
 	}))
 
-	m.Get("/", func(r render.Render, session sessions.Session) {
-		r.HTML(200, "index", map[string]string{"Flash": getFlash(session, "notice")})
+	m.Get("/", func(r render.Render, w http.ResponseWriter, req *http.Request) {
+		session, _ := store.Get(req, "isucon_go_session")
+		notice := getFlash(session, "notice")
+
+		session.Save(req, w)
+		r.HTML(200, "index", map[string]string{"Flash": notice})
 	})
 
-	m.Post("/login", func(req *http.Request, r render.Render, session sessions.Session) {
+	m.Post("/login", func(w http.ResponseWriter, req *http.Request, r render.Render) {
 		user, err := attemptLogin(req)
+		session, _ := store.Get(req, "isucon_go_session")
 
 		notice := ""
 		if err != nil || user == nil {
@@ -80,20 +83,25 @@ func main() {
 				notice = "Wrong username or password"
 			}
 
-			session.Set("notice", notice)
+			session.Values["notice"] = notice
+			session.Save(req, w)
+
 			r.Redirect("/")
 			return
 		}
 
-		session.Set("user_id", strconv.Itoa(user.ID))
+		session.Values["user_id"] = strconv.Itoa(user.ID)
+		session.Save(req, w)
 		r.Redirect("/mypage")
 	})
 
-	m.Get("/mypage", func(r render.Render, session sessions.Session) {
-		userID := session.Get("user_id")
+	m.Get("/mypage", func(w http.ResponseWriter, req *http.Request, r render.Render) {
+		session, _ := store.Get(req, "isucon_go_session")
 
-		if userID == nil {
-			session.Set("notice", "You must be logged in")
+		userID, ok := session.Values["user_id"]
+		if !ok {
+			session.Values["notice"] = "You must be logged in"
+			session.Save(req, w)
 			r.Redirect("/")
 			return
 		}

@@ -56,7 +56,7 @@ func isLockedUser(user *User) (bool, error) {
 		return false, err
 	}
 
-	return UserLockThreshold <= int(ni.Int64), nil
+	return userLockThreshold <= int(ni.Int64), nil
 }
 
 func isBannedIP(ip string) (bool, error) {
@@ -76,7 +76,7 @@ func isBannedIP(ip string) (bool, error) {
 		return false, err
 	}
 
-	return IPBanThreshold <= int(ni.Int64), nil
+	return iPBanThreshold <= int(ni.Int64), nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
@@ -150,7 +150,7 @@ func bannedIPs() []string {
 		"SELECT ip FROM "+
 			"(SELECT ip, MAX(succeeded) as max_succeeded, COUNT(1) as cnt FROM login_log GROUP BY ip) "+
 			"AS t0 WHERE t0.max_succeeded = 0 AND t0.cnt >= ?",
-		IPBanThreshold,
+		iPBanThreshold,
 	)
 
 	if err != nil {
@@ -198,7 +198,7 @@ func bannedIPs() []string {
 			return ips
 		}
 
-		if IPBanThreshold <= count {
+		if iPBanThreshold <= count {
 			ips = append(ips, ip)
 		}
 	}
@@ -216,7 +216,7 @@ func lockedUsers() []string {
 		"SELECT user_id, login FROM "+
 			"(SELECT user_id, login, MAX(succeeded) as max_succeeded, COUNT(1) as cnt FROM login_log GROUP BY user_id) "+
 			"AS t0 WHERE t0.user_id IS NOT NULL AND t0.max_succeeded = 0 AND t0.cnt >= ?",
-		UserLockThreshold,
+		userLockThreshold,
 	)
 
 	if err != nil {
@@ -266,7 +266,7 @@ func lockedUsers() []string {
 			return userIds
 		}
 
-		if UserLockThreshold <= count {
+		if userLockThreshold <= count {
 			userIds = append(userIds, login)
 		}
 	}
