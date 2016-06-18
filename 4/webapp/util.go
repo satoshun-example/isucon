@@ -3,9 +3,10 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
-	"github.com/martini-contrib/sessions"
 	"io"
 	"os"
+
+	"github.com/martini-contrib/sessions"
 )
 
 func getEnv(key string, def string) string {
@@ -22,10 +23,10 @@ func getFlash(session sessions.Session, key string) string {
 
 	if value == nil {
 		return ""
-	} else {
-		session.Delete(key)
-		return value.(string)
 	}
+
+	session.Delete(key)
+	return value.(string)
 }
 
 func calcPassHash(password, hash string) string {

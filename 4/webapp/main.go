@@ -18,8 +18,8 @@ import (
 
 var db *sql.DB
 var (
-	UserLockThreshold int
-	IPBanThreshold    int
+	userLockThreshold int
+	iPBanThreshold    int
 )
 
 func init() {
@@ -29,14 +29,6 @@ func init() {
 		getEnv("ISU4_DB_PASSWORD", ""),
 		getEnv("ISU4_DB_NAME", "isu4_qualifier"),
 	)
-	// dsn := fmt.Sprintf(
-	// 	"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
-	// 	getEnv("ISU4_DB_USER", "root"),
-	// 	getEnv("ISU4_DB_PASSWORD", ""),
-	// 	getEnv("ISU4_DB_HOST", "localhost"),
-	// 	getEnv("ISU4_DB_PORT", "3306"),
-	// 	getEnv("ISU4_DB_NAME", "isu4_qualifier"),
-	// )
 
 	var err error
 
@@ -45,12 +37,14 @@ func init() {
 		panic(err)
 	}
 
-	UserLockThreshold, err = strconv.Atoi(getEnv("ISU4_USER_LOCK_THRESHOLD", "3"))
+	db.SetMaxIdleConns(100)
+
+	userLockThreshold, err = strconv.Atoi(getEnv("ISU4_USER_LOCK_THRESHOLD", "3"))
 	if err != nil {
 		panic(err)
 	}
 
-	IPBanThreshold, err = strconv.Atoi(getEnv("ISU4_IP_BAN_THRESHOLD", "10"))
+	iPBanThreshold, err = strconv.Atoi(getEnv("ISU4_IP_BAN_THRESHOLD", "10"))
 	if err != nil {
 		panic(err)
 	}

@@ -9,8 +9,6 @@ type User struct {
 	Login        string
 	PasswordHash string
 	Salt         string
-
-	LastLogin *LastLogin
 }
 
 type LastLogin struct {
