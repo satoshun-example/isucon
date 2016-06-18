@@ -19,25 +19,25 @@ type LastLogin struct {
 	CreatedAt time.Time
 }
 
-func (u *User) getLastLogin() *LastLogin {
+func getLastLogin(userID interface{}) *LastLogin {
 	rows, err := db.Query(
 		"SELECT login, ip, created_at FROM login_log WHERE succeeded = 1 AND user_id = ? ORDER BY id DESC LIMIT 2",
-		u.ID,
+		userID,
 	)
 
 	if err != nil {
 		return nil
 	}
-
 	defer rows.Close()
+
+	lastLogin := new(LastLogin)
 	for rows.Next() {
-		u.LastLogin = &LastLogin{}
-		err = rows.Scan(&u.LastLogin.Login, &u.LastLogin.IP, &u.LastLogin.CreatedAt)
+		err = rows.Scan(&lastLogin.Login, &lastLogin.IP, &lastLogin.CreatedAt)
 		if err != nil {
-			u.LastLogin = nil
+			lastLogin = nil
 			return nil
 		}
 	}
 
-	return u.LastLogin
+	return lastLogin
 }
