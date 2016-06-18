@@ -3,12 +3,17 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"runtime"
+	"strconv"
+
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/martini-contrib/render"
 	"github.com/martini-contrib/sessions"
-	"net/http"
-	"strconv"
 )
 
 var db *sql.DB
@@ -19,13 +24,19 @@ var (
 
 func init() {
 	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
+		"%s:%s@unix(/var/run/mysqld/mysqld.sock)/%s?parseTime=true&loc=Local",
 		getEnv("ISU4_DB_USER", "root"),
 		getEnv("ISU4_DB_PASSWORD", ""),
-		getEnv("ISU4_DB_HOST", "localhost"),
-		getEnv("ISU4_DB_PORT", "3306"),
 		getEnv("ISU4_DB_NAME", "isu4_qualifier"),
 	)
+	// dsn := fmt.Sprintf(
+	// 	"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
+	// 	getEnv("ISU4_DB_USER", "root"),
+	// 	getEnv("ISU4_DB_PASSWORD", ""),
+	// 	getEnv("ISU4_DB_HOST", "localhost"),
+	// 	getEnv("ISU4_DB_PORT", "3306"),
+	// 	getEnv("ISU4_DB_NAME", "isu4_qualifier"),
+	// )
 
 	var err error
 
@@ -46,12 +57,13 @@ func init() {
 }
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	m := martini.Classic()
 
 	store := sessions.NewCookieStore([]byte("secret-isucon"))
 	m.Use(sessions.Sessions("isucon_go_session", store))
 
-	m.Use(martini.Static("../public"))
 	m.Use(render.Renderer(render.Options{
 		Layout: "layout",
 	}))
@@ -103,5 +115,22 @@ func main() {
 		})
 	})
 
-	http.ListenAndServe(":8080", m)
+	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", m))
+}
+
+func unixSocketServe(path string, handler http.Handler) error {
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		os.Remove(path)
+	}
+
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{path, "unix"})
+	if err != nil {
+		panic(err)
+	}
+
+	if err := os.Chmod(path, 0777); err != nil {
+		panic(err)
+	}
+
+	return http.Serve(listener, handler)
 }
