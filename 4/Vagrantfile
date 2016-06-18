@@ -13,9 +13,13 @@ BRANCH = ENV["BRANCH"] || "master"
 Vagrant.configure(2) do |config|
 
   config.vm.box = box
+  config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.synced_folder "webapp", "/home/isucon/webapp/go", owner: "isucon", group: "isucon"
+  config.vm.synced_folder "sql", "/home/isucon/sql", owner: "isucon", group: "isucon"
 
   config.vm.provider "virtualbox" do |vb|
     vb.memory = "4096"
+    vb.cpus = "4"
   end
 
   config.vm.provision "shell", inline: <<-SHELL
