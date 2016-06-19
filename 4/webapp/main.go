@@ -2,7 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net"
 	"net/http"
@@ -13,11 +15,13 @@ import (
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
-	"github.com/martini-contrib/render"
 )
 
 var db *sql.DB
-var store = sessions.NewCookieStore([]byte("secret-isucon"))
+var (
+	store     = sessions.NewCookieStore([]byte("secret-isucon"))
+	templates = template.Must(template.ParseFiles("templates/index.tmpl", "templates/mypage.tmpl"))
+)
 var (
 	userLockThreshold int
 	iPBanThreshold    int
@@ -56,24 +60,21 @@ func main() {
 
 	m := martini.Classic()
 
-	m.Use(render.Renderer(render.Options{
-		Layout: "layout",
-	}))
-
-	m.Get("/", func(r render.Render, w http.ResponseWriter, req *http.Request) {
-		session, _ := store.Get(req, "isucon_go_session")
+	m.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		session, _ := store.Get(r, "isucon_go_session")
 		notice := getFlash(session, "notice")
 
-		session.Save(req, w)
-		r.HTML(200, "index", map[string]string{"Flash": notice})
+		session.Save(r, w)
+
+		templates.ExecuteTemplate(w, "index.tmpl", map[string]string{"Flash": notice})
 	})
 
-	m.Post("/login", func(w http.ResponseWriter, req *http.Request, r render.Render) {
-		user, err := attemptLogin(req)
-		session, _ := store.Get(req, "isucon_go_session")
+	m.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+		session, _ := store.Get(r, "isucon_go_session")
+		user, err := attemptLogin(r)
 
-		notice := ""
 		if err != nil || user == nil {
+			notice := ""
 			switch err {
 			case ErrBannedIP:
 				notice = "You're banned."
@@ -84,39 +85,40 @@ func main() {
 			}
 
 			session.Values["notice"] = notice
-			session.Save(req, w)
+			session.Save(r, w)
 
-			r.Redirect("/")
+			http.Redirect(w, r, "/", 302)
 			return
 		}
 
 		session.Values["user_id"] = strconv.Itoa(user.ID)
-		session.Save(req, w)
-		r.Redirect("/mypage")
+		session.Save(r, w)
+		http.Redirect(w, r, "/mypage", 302)
 	})
 
-	m.Get("/mypage", func(w http.ResponseWriter, req *http.Request, r render.Render) {
-		session, _ := store.Get(req, "isucon_go_session")
+	m.Get("/mypage", func(w http.ResponseWriter, r *http.Request) {
+		session, _ := store.Get(r, "isucon_go_session")
 
 		userID, ok := session.Values["user_id"]
 		if !ok {
 			session.Values["notice"] = "You must be logged in"
-			session.Save(req, w)
-			r.Redirect("/")
+			session.Save(r, w)
+			http.Redirect(w, r, "/", 302)
 			return
 		}
 
-		r.HTML(200, "mypage", getLastLogin(userID))
+		templates.ExecuteTemplate(w, "mypage.tmpl", getLastLogin(userID))
 	})
 
-	m.Get("/report", func(r render.Render) {
-		r.JSON(200, map[string][]string{
+	m.Get("/report", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string][]string{
 			"banned_ips":   bannedIPs(),
 			"locked_users": lockedUsers(),
 		})
 	})
 
 	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", m))
+	// log.Fatal(http.ListenAndServe(":8081", m))
 }
 
 func unixSocketServe(path string, handler http.Handler) error {
