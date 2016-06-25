@@ -28,17 +28,19 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User, conn r
 		userID.Valid = true
 
 		if succeeded {
-			conn.Do("DEL", id64)
+			conn.Send("DEL", id64)
 		} else {
-			conn.Do("INCR", id64)
+			conn.Send("INCR", id64)
 		}
 	}
 
 	if succeeded {
-		conn.Do("DEL", remoteAddr)
+		conn.Send("DEL", remoteAddr)
 	} else {
-		conn.Do("INCR", remoteAddr)
+		conn.Send("INCR", remoteAddr)
 	}
+
+	conn.Flush()
 
 	_, err := db.Exec(
 		"INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) "+
