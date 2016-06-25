@@ -12,12 +12,15 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 )
 
-var db *sql.DB
+var (
+	db          *sql.DB
+	failUserIds map[int]int
+)
+
 var (
 	store     = sessions.NewCookieStore([]byte("secret-isucon"))
 	templates = template.Must(template.ParseFiles("templates/index.tmpl", "templates/mypage.tmpl"))
@@ -36,7 +39,6 @@ func init() {
 	)
 
 	var err error
-
 	db, err = sql.Open("mysql", dsn)
 	if err != nil {
 		panic(err)
@@ -53,23 +55,15 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	failUserIds = make(map[int]int)
 }
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	m := martini.Classic()
-
-	m.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "isucon_go_session")
-		notice := getFlash(session, "notice")
-
-		session.Save(r, w)
-
-		templates.ExecuteTemplate(w, "index.tmpl", map[string]string{"Flash": notice})
-	})
-
-	m.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+	// POST
+	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		session, _ := store.Get(r, "isucon_go_session")
 		user, err := attemptLogin(r)
 
@@ -77,16 +71,14 @@ func main() {
 			notice := ""
 			switch err {
 			case ErrBannedIP:
-				notice = "You're banned."
+				notice = "banned"
 			case ErrLockedUser:
-				notice = "This account is locked."
+				notice = "locked"
 			default:
-				notice = "Wrong username or password"
+				notice = "wrong"
 			}
 
-			session.Values["notice"] = notice
-			session.Save(r, w)
-
+			http.SetCookie(w, &http.Cookie{Name: "notice", Value: notice})
 			http.Redirect(w, r, "/", 302)
 			return
 		}
@@ -96,13 +88,12 @@ func main() {
 		http.Redirect(w, r, "/mypage", 302)
 	})
 
-	m.Get("/mypage", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/mypage", func(w http.ResponseWriter, r *http.Request) {
 		session, _ := store.Get(r, "isucon_go_session")
 
 		userID, ok := session.Values["user_id"]
 		if !ok {
-			session.Values["notice"] = "You must be logged in"
-			session.Save(r, w)
+			http.SetCookie(w, &http.Cookie{Name: "notice", Value: "logged"})
 			http.Redirect(w, r, "/", 302)
 			return
 		}
@@ -110,15 +101,15 @@ func main() {
 		templates.ExecuteTemplate(w, "mypage.tmpl", getLastLogin(userID))
 	})
 
-	m.Get("/report", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/report", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string][]string{
 			"banned_ips":   bannedIPs(),
 			"locked_users": lockedUsers(),
 		})
 	})
 
-	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", m))
-	// log.Fatal(http.ListenAndServe(":8081", m))
+	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", nil))
+	// log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
 func unixSocketServe(path string, handler http.Handler) error {

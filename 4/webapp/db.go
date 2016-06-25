@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 )
+
+var UL sync.Mutex
 
 var (
 	ErrBannedIP      = errors.New("Banned IP")
@@ -20,16 +23,31 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 		succ = 1
 	}
 
-	var userId sql.NullInt64
+	var userID sql.NullInt64
 	if user != nil {
-		userId.Int64 = int64(user.ID)
-		userId.Valid = true
+		id64 := int64(user.ID)
+		userID.Int64 = id64
+		userID.Valid = true
+
+		id := int(id64)
+
+		UL.Lock()
+		if succeeded {
+			delete(failUserIds, id)
+		} else {
+			if _, ok := failUserIds[id]; ok {
+				failUserIds[id] += 1
+			} else {
+				failUserIds[id] = 1
+			}
+		}
+		UL.Unlock()
 	}
 
 	_, err := db.Exec(
 		"INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) "+
 			"VALUES (?,?,?,?,?)",
-		time.Now(), userId, login, remoteAddr, succ,
+		time.Now(), userID, login, remoteAddr, succ,
 	)
 
 	return err
@@ -40,23 +58,12 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		user.ID, user.ID,
-	)
-	err := row.Scan(&ni)
-
-	switch {
-	case err == sql.ErrNoRows:
+	index, ok := failUserIds[user.ID]
+	if !ok {
 		return false, nil
-	case err != nil:
-		return false, err
 	}
 
-	return userLockThreshold <= int(ni.Int64), nil
+	return userLockThreshold <= index, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
@@ -128,11 +135,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 	return user, nil
 }
 
-func getCurrentUser(userId interface{}) *User {
+func getCurrentUser(userID interface{}) *User {
 	user := &User{}
 	row := db.QueryRow(
 		"SELECT id, login, password_hash, salt FROM users WHERE id = ?",
-		userId,
+		userID,
 	)
 	err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
 
@@ -225,10 +232,10 @@ func lockedUsers() []string {
 
 	defer rows.Close()
 	for rows.Next() {
-		var userId int
+		var userID int
 		var login string
 
-		if err := rows.Scan(&userId, &login); err != nil {
+		if err := rows.Scan(&userID, &login); err != nil {
 			return userIds
 		}
 		userIds = append(userIds, login)
@@ -247,11 +254,11 @@ func lockedUsers() []string {
 
 	defer rowsB.Close()
 	for rowsB.Next() {
-		var userId int
+		var userID int
 		var login string
 		var lastLoginId int
 
-		if err := rowsB.Scan(&userId, &login, &lastLoginId); err != nil {
+		if err := rowsB.Scan(&userID, &login, &lastLoginId); err != nil {
 			return userIds
 		}
 
@@ -259,7 +266,7 @@ func lockedUsers() []string {
 
 		err = db.QueryRow(
 			"SELECT COUNT(1) AS cnt FROM login_log WHERE user_id = ? AND ? < id",
-			userId, lastLoginId,
+			userID, lastLoginId,
 		).Scan(&count)
 
 		if err != nil {
