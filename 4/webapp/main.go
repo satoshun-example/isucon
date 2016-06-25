@@ -12,18 +12,19 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/garyburd/redigo/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 )
 
 var (
-	db          *sql.DB
-	failUserIds map[int]int
+	db        *sql.DB
+	redisPool *redis.Pool
 )
 
 var (
 	store     = sessions.NewCookieStore([]byte("secret-isucon"))
-	templates = template.Must(template.ParseFiles("templates/index.tmpl", "templates/mypage.tmpl"))
+	templates = template.Must(template.ParseFiles("templates/mypage.tmpl"))
 )
 var (
 	userLockThreshold int
@@ -56,7 +57,14 @@ func init() {
 		panic(err)
 	}
 
-	failUserIds = make(map[int]int)
+	redisPool = redis.NewPool(func() (redis.Conn, error) {
+		conn, err := redis.Dial("unix", "/tmp/redis.sock")
+		if err != nil {
+			return nil, err
+		}
+
+		return conn, nil
+	}, 100)
 }
 
 func main() {
@@ -108,6 +116,7 @@ func main() {
 		})
 	})
 
+	defer redisPool.Close()
 	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", nil))
 	// log.Fatal(http.ListenAndServe(":8081", nil))
 }

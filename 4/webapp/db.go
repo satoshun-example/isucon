@@ -3,12 +3,10 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"github.com/garyburd/redigo/redis"
 	"net/http"
-	"sync"
 	"time"
 )
-
-var UL sync.Mutex
 
 var (
 	ErrBannedIP      = errors.New("Banned IP")
@@ -29,19 +27,14 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 		userID.Int64 = id64
 		userID.Valid = true
 
-		id := int(id64)
+		c := redisPool.Get()
+		defer c.Close()
 
-		UL.Lock()
 		if succeeded {
-			delete(failUserIds, id)
+			c.Do("DEL", id64)
 		} else {
-			if _, ok := failUserIds[id]; ok {
-				failUserIds[id] += 1
-			} else {
-				failUserIds[id] = 1
-			}
+			c.Do("INCR", id64)
 		}
-		UL.Unlock()
 	}
 
 	_, err := db.Exec(
@@ -58,8 +51,11 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	index, ok := failUserIds[user.ID]
-	if !ok {
+	c := redisPool.Get()
+	defer c.Close()
+
+	index, err := redis.Int(c.Do("GET", user.ID))
+	if err != nil {
 		return false, nil
 	}
 
