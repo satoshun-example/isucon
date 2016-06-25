@@ -15,7 +15,7 @@ var (
 	ErrWrongPassword = errors.New("Wrong password")
 )
 
-func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
+func createLoginLog(succeeded bool, remoteAddr, login string, user *User, conn redis.Conn) error {
 	succ := 0
 	if succeeded {
 		succ = 1
@@ -27,14 +27,17 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 		userID.Int64 = id64
 		userID.Valid = true
 
-		c := redisPool.Get()
-		defer c.Close()
-
 		if succeeded {
-			c.Do("DEL", id64)
+			conn.Do("DEL", id64)
 		} else {
-			c.Do("INCR", id64)
+			conn.Do("INCR", id64)
 		}
+	}
+
+	if succeeded {
+		conn.Do("DEL", remoteAddr)
+	} else {
+		conn.Do("INCR", remoteAddr)
 	}
 
 	_, err := db.Exec(
@@ -46,15 +49,12 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 	return err
 }
 
-func isLockedUser(user *User) (bool, error) {
+func isLockedUser(user *User, conn redis.Conn) (bool, error) {
 	if user == nil {
 		return false, nil
 	}
 
-	c := redisPool.Get()
-	defer c.Close()
-
-	index, err := redis.Int(c.Do("GET", user.ID))
+	index, err := redis.Int(conn.Do("GET", user.ID))
 	if err != nil {
 		return false, nil
 	}
@@ -62,27 +62,19 @@ func isLockedUser(user *User) (bool, error) {
 	return userLockThreshold <= index, nil
 }
 
-func isBannedIP(ip string) (bool, error) {
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		ip, ip,
-	)
-	err := row.Scan(&ni)
-
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
+func isBannedIP(ip string, conn redis.Conn) (bool, error) {
+	index, err := redis.Int(conn.Do("GET", ip))
+	if err != nil {
 		return false, err
 	}
 
-	return iPBanThreshold <= int(ni.Int64), nil
+	return iPBanThreshold <= index, nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
+	conn := redisPool.Get()
+	defer conn.Close()
+
 	succeeded := false
 	user := &User{}
 
@@ -95,7 +87,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	defer func() {
-		createLoginLog(succeeded, remoteAddr, loginName, user)
+		createLoginLog(succeeded, remoteAddr, loginName, user, conn)
 	}()
 
 	row := db.QueryRow(
@@ -111,11 +103,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 		return nil, err
 	}
 
-	if banned, _ := isBannedIP(remoteAddr); banned {
+	if banned, _ := isBannedIP(remoteAddr, conn); banned {
 		return nil, ErrBannedIP
 	}
 
-	if locked, _ := isLockedUser(user); locked {
+	if locked, _ := isLockedUser(user, conn); locked {
 		return nil, ErrLockedUser
 	}
 

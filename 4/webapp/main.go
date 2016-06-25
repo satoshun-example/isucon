@@ -57,14 +57,7 @@ func init() {
 		panic(err)
 	}
 
-	redisPool = redis.NewPool(func() (redis.Conn, error) {
-		conn, err := redis.Dial("unix", "/tmp/redis.sock")
-		if err != nil {
-			return nil, err
-		}
-
-		return conn, nil
-	}, 100)
+	redisPool = unixRedisPool()
 }
 
 func main() {
@@ -119,6 +112,17 @@ func main() {
 	defer redisPool.Close()
 	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", nil))
 	// log.Fatal(http.ListenAndServe(":8081", nil))
+}
+
+func unixRedisPool() *redis.Pool {
+	return redis.NewPool(func() (redis.Conn, error) {
+		conn, err := redis.Dial("unix", "/tmp/redis.sock")
+		if err != nil {
+			return nil, err
+		}
+
+		return conn, nil
+	}, 100)
 }
 
 func unixSocketServe(path string, handler http.Handler) error {
