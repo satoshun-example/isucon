@@ -3,21 +3,19 @@
 
 box = "ubuntu/wily64"
 
-GH_USER = ENV["GH_USER"] || "matsuu"
-BRANCH = ENV["BRANCH"] || "master"
 
-# All Vagrant configuration is done below. The "2" in Vagrant.configure
-# configures the configuration version (we support older styles for
-# backwards compatibility). Please don't change it unless you know what
-# you're doing.
 Vagrant.configure(2) do |config|
 
   config.vm.box = box
   config.vm.network "forwarded_port", guest: 80, host: 8080
+
   config.vm.synced_folder "webapp", "/home/isucon/webapp/go", owner: "isucon", group: "isucon"
+  config.vm.synced_folder "html", "/home/isucon/html", owner: "isucon", group: "isucon"
   config.vm.synced_folder "sql", "/home/isucon/sql", owner: "isucon", group: "isucon"
+  config.vm.synced_folder "scripts", "/home/isucon/scripts", owner: "isucon", group: "isucon"
 
   config.vm.provider "virtualbox" do |vb|
+    vb.name = "isucon4-qualifier"
     vb.memory = "4096"
     vb.cpus = "4"
   end
@@ -33,7 +31,7 @@ Vagrant.configure(2) do |config|
     git clone https://github.com/satoshun-example/ansible-isucon.git
     (
       cd ansible-isucon
-      git checkout #{BRANCH}
+      git checkout master
       cd isucon4-qualifier-ubuntu
       PYTHONUNBUFFERED=1 ANSIBLE_FORCE_COLOR=true ansible-playbook playbook.yml -i local
     )
