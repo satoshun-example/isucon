@@ -292,6 +292,13 @@ func GetLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
+type IComment struct {
+	AccountName string
+	NickName    string
+	Comment     string
+	CreatedAt   time.Time
+}
+
 func GetIndex(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -318,19 +325,21 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 
-	rows, err = db.Query(`SELECT c.user_id AS user_id, c.comment AS comment, c.created_at AS created_at
+	rows, err = db.Query(`
+SELECT c.comment AS comment, c.created_at AS created_at, u.nick_name AS nick_name, u.account_name AS account_name
 FROM comments c
 JOIN entries e ON c.entry_id = e.id
+JOIN users u ON u.id = e.user_id
 WHERE e.user_id = ?
 ORDER BY c.created_at DESC
 LIMIT 10`, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
-	commentsForMe := make([]Comment, 0, 10)
+	commentsForMe := make([]IComment, 0, 10)
 	for rows.Next() {
-		c := Comment{}
-		checkErr(rows.Scan(&c.UserID, &c.Comment, &c.CreatedAt))
+		c := IComment{}
+		checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
 		commentsForMe = append(commentsForMe, c)
 	}
 	rows.Close()
@@ -432,7 +441,7 @@ LIMIT 10`, user.ID)
 		User              User
 		Profile           Profile
 		Entries           []Entry
-		CommentsForMe     []Comment
+		CommentsForMe     []IComment
 		EntriesOfFriends  []Entry
 		CommentsOfFriends []Comment
 		Friends           []Friend
