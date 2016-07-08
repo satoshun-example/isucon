@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -306,26 +307,44 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 
 	user := getCurrentUser(w, r)
 
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	prof := Profile{}
-	row := db.QueryRow(`SELECT * FROM profiles WHERE user_id = ?`, user.ID)
-	err := row.Scan(&prof.UserID, &prof.FirstName, &prof.LastName, &prof.Sex, &prof.Birthday, &prof.Pref, &prof.UpdatedAt)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
+	go func() {
+		defer wg.Done()
 
-	rows, err := db.Query(`SELECT id FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`, user.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
+		row := db.QueryRow(`SELECT * FROM profiles WHERE user_id = ?`, user.ID)
+		err := row.Scan(&prof.UserID, &prof.FirstName, &prof.LastName, &prof.Sex, &prof.Birthday, &prof.Pref, &prof.UpdatedAt)
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+	}()
+
+	wg.Add(1)
 	entries := make([]Entry, 0, 5)
-	for rows.Next() {
-		var id int
-		checkErr(rows.Scan(&id))
-		entries = append(entries, Entry{ID: id})
-	}
-	rows.Close()
+	go func() {
+		defer wg.Done()
 
-	rows, err = db.Query(`
+		rows, err := db.Query(`SELECT id FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`, user.ID)
+		defer rows.Close()
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+
+		for rows.Next() {
+			var id int
+			checkErr(rows.Scan(&id))
+			entries = append(entries, Entry{ID: id})
+		}
+	}()
+
+	wg.Add(1)
+	commentsForMe := make([]IComment, 0, 10)
+	go func() {
+		defer wg.Done()
+
+		rows, err := db.Query(`
 SELECT c.comment AS comment, c.created_at AS created_at, u.nick_name AS nick_name, u.account_name AS account_name
 FROM comments c
 JOIN entries e ON c.entry_id = e.id
@@ -333,110 +352,134 @@ JOIN users u ON u.id = e.user_id
 WHERE e.user_id = ?
 ORDER BY c.created_at DESC
 LIMIT 10`, user.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	commentsForMe := make([]IComment, 0, 10)
-	for rows.Next() {
-		c := IComment{}
-		checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
-		commentsForMe = append(commentsForMe, c)
-	}
-	rows.Close()
 
-	rows, err = db.Query(`SELECT id, user_id, body, created_at FROM entries ORDER BY created_at DESC LIMIT 1000`)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
+		defer rows.Close()
+
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+
+		for rows.Next() {
+			c := IComment{}
+			checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
+			commentsForMe = append(commentsForMe, c)
+		}
+	}()
+
+	wg.Add(1)
 	entriesOfFriends := make([]Entry, 0, 10)
-	for rows.Next() {
-		var id, userID int
-		var body string
-		var createdAt time.Time
-		checkErr(rows.Scan(&id, &userID, &body, &createdAt))
-		if !isFriend(w, r, userID) {
-			continue
-		}
+	go func() {
+		defer wg.Done()
 
-		entriesOfFriends = append(entriesOfFriends, Entry{ID: id, UserID: userID, Title: strings.SplitN(body, "\n", 2)[0], Content: strings.SplitN(body, "\n", 2)[1], CreatedAt: createdAt})
-		if len(entriesOfFriends) >= 10 {
-			break
+		rows, err := db.Query(`SELECT id, user_id, body, created_at FROM entries ORDER BY created_at DESC LIMIT 1000`)
+		if err != sql.ErrNoRows {
+			checkErr(err)
 		}
-	}
-	rows.Close()
-
-	rows, err = db.Query(`SELECT * FROM comments ORDER BY created_at DESC LIMIT 1000`)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	commentsOfFriends := make([]Comment, 0, 10)
-	for rows.Next() {
-		c := Comment{}
-		checkErr(rows.Scan(&c.ID, &c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
-		if !isFriend(w, r, c.UserID) {
-			continue
-		}
-		row := db.QueryRow(`SELECT * FROM entries WHERE id = ?`, c.EntryID)
-		var id, userID, private int
-		var body string
-		var createdAt time.Time
-		checkErr(row.Scan(&id, &userID, &private, &body, &createdAt))
-		entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
-		if entry.Private {
-			if !permitted(w, r, entry.UserID) {
+		for rows.Next() {
+			var id, userID int
+			var body string
+			var createdAt time.Time
+			checkErr(rows.Scan(&id, &userID, &body, &createdAt))
+			if !isFriend(w, r, userID) {
 				continue
 			}
-		}
-		commentsOfFriends = append(commentsOfFriends, c)
-		if len(commentsOfFriends) >= 10 {
-			break
-		}
-	}
-	rows.Close()
 
-	// count friends
-	rows, err = db.Query(`SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC`, user.ID, user.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	friendsMap := make(map[int]time.Time)
-	for rows.Next() {
-		var id, one, another int
-		var createdAt time.Time
-		checkErr(rows.Scan(&id, &one, &another, &createdAt))
-		var friendID int
-		if one == user.ID {
-			friendID = another
-		} else {
-			friendID = one
+			entriesOfFriends = append(entriesOfFriends, Entry{ID: id, UserID: userID, Title: strings.SplitN(body, "\n", 2)[0], Content: strings.SplitN(body, "\n", 2)[1], CreatedAt: createdAt})
+			if len(entriesOfFriends) >= 10 {
+				break
+			}
 		}
-		if _, ok := friendsMap[friendID]; !ok {
-			friendsMap[friendID] = createdAt
-		}
-	}
-	friends := make([]Friend, 0, len(friendsMap))
-	for key, val := range friendsMap {
-		friends = append(friends, Friend{key, val})
-	}
-	rows.Close()
+		rows.Close()
+	}()
 
-	rows, err = db.Query(`SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
+	wg.Add(1)
+	commentsOfFriends := make([]Comment, 0, 10)
+	go func() {
+		wg.Done()
+
+		rows, err := db.Query(`SELECT * FROM comments ORDER BY created_at DESC LIMIT 1000`)
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+		for rows.Next() {
+			c := Comment{}
+			checkErr(rows.Scan(&c.ID, &c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
+			if !isFriend(w, r, c.UserID) {
+				continue
+			}
+			row := db.QueryRow(`SELECT * FROM entries WHERE id = ?`, c.EntryID)
+			var id, userID, private int
+			var body string
+			var createdAt time.Time
+			checkErr(row.Scan(&id, &userID, &private, &body, &createdAt))
+			entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
+			if entry.Private {
+				if !permitted(w, r, entry.UserID) {
+					continue
+				}
+			}
+			commentsOfFriends = append(commentsOfFriends, c)
+			if len(commentsOfFriends) >= 10 {
+				break
+			}
+		}
+		rows.Close()
+	}()
+
+	wg.Add(1)
+	friends := make([]Friend, 0, 10)
+	go func() {
+		defer wg.Done()
+		// count friends
+		rows, err := db.Query(`SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC`, user.ID, user.ID)
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+
+		friendsMap := make(map[int]time.Time)
+		for rows.Next() {
+			var id, one, another int
+			var createdAt time.Time
+			checkErr(rows.Scan(&id, &one, &another, &createdAt))
+			var friendID int
+			if one == user.ID {
+				friendID = another
+			} else {
+				friendID = one
+			}
+			if _, ok := friendsMap[friendID]; !ok {
+				friendsMap[friendID] = createdAt
+			}
+		}
+
+		for key, val := range friendsMap {
+			friends = append(friends, Friend{key, val})
+		}
+		rows.Close()
+	}()
+
+	wg.Add(1)
+	footprints := make([]Footprint, 0, 10)
+	go func() {
+		defer wg.Done()
+		rows, err := db.Query(`SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
 FROM footprints
 WHERE user_id = ?
 GROUP BY user_id, owner_id, DATE(created_at)
 ORDER BY updated DESC
 LIMIT 10`, user.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	footprints := make([]Footprint, 0, 10)
-	for rows.Next() {
-		fp := Footprint{}
-		checkErr(rows.Scan(&fp.UserID, &fp.OwnerID, &fp.CreatedAt, &fp.Updated))
-		footprints = append(footprints, fp)
-	}
-	rows.Close()
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+		for rows.Next() {
+			fp := Footprint{}
+			checkErr(rows.Scan(&fp.UserID, &fp.OwnerID, &fp.CreatedAt, &fp.Updated))
+			footprints = append(footprints, fp)
+		}
+		rows.Close()
+	}()
 
+	wg.Wait()
 	render(w, r, http.StatusOK, "index.html", struct {
 		User              User
 		Profile           Profile
