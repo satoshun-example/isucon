@@ -20,6 +20,7 @@ import (
 var (
 	db        *sql.DB
 	redisPool *redis.Pool
+	loginMap  *MultiMapLastLogin
 )
 
 var (
@@ -58,6 +59,7 @@ func init() {
 	}
 
 	redisPool = unixRedisPool()
+	loginMap = NewLoginMap(256)
 }
 
 func main() {

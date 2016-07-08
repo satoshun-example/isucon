@@ -39,13 +39,13 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User, conn r
 	} else {
 		conn.Send("INCR", remoteAddr)
 	}
-
 	conn.Flush()
 
+	createdAt := time.Now()
 	_, err := db.Exec(
 		"INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) "+
 			"VALUES (?,?,?,?,?)",
-		time.Now(), userID, login, remoteAddr, succ,
+		createdAt, userID, login, remoteAddr, succ,
 	)
 
 	return err
