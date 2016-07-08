@@ -306,21 +306,19 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 		checkErr(err)
 	}
 
-	rows, err := db.Query(`SELECT * FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`, user.ID)
+	rows, err := db.Query(`SELECT id FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
 	entries := make([]Entry, 0, 5)
 	for rows.Next() {
-		var id, userID, private int
-		var body string
-		var createdAt time.Time
-		checkErr(rows.Scan(&id, &userID, &private, &body, &createdAt))
-		entries = append(entries, Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt})
+		var id int
+		checkErr(rows.Scan(&id))
+		entries = append(entries, Entry{ID: id})
 	}
 	rows.Close()
 
-	rows, err = db.Query(`SELECT c.id AS id, c.entry_id AS entry_id, c.user_id AS user_id, c.comment AS comment, c.created_at AS created_at
+	rows, err = db.Query(`SELECT c.user_id AS user_id, c.comment AS comment, c.created_at AS created_at
 FROM comments c
 JOIN entries e ON c.entry_id = e.id
 WHERE e.user_id = ?
@@ -332,25 +330,26 @@ LIMIT 10`, user.ID)
 	commentsForMe := make([]Comment, 0, 10)
 	for rows.Next() {
 		c := Comment{}
-		checkErr(rows.Scan(&c.ID, &c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
+		checkErr(rows.Scan(&c.UserID, &c.Comment, &c.CreatedAt))
 		commentsForMe = append(commentsForMe, c)
 	}
 	rows.Close()
 
-	rows, err = db.Query(`SELECT * FROM entries ORDER BY created_at DESC LIMIT 1000`)
+	rows, err = db.Query(`SELECT id, user_id, body, created_at FROM entries ORDER BY created_at DESC LIMIT 1000`)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
 	entriesOfFriends := make([]Entry, 0, 10)
 	for rows.Next() {
-		var id, userID, private int
+		var id, userID int
 		var body string
 		var createdAt time.Time
-		checkErr(rows.Scan(&id, &userID, &private, &body, &createdAt))
+		checkErr(rows.Scan(&id, &userID, &body, &createdAt))
 		if !isFriend(w, r, userID) {
 			continue
 		}
-		entriesOfFriends = append(entriesOfFriends, Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt})
+
+		entriesOfFriends = append(entriesOfFriends, Entry{ID: id, UserID: userID, Title: strings.SplitN(body, "\n", 2)[0], Content: strings.SplitN(body, "\n", 2)[1], CreatedAt: createdAt})
 		if len(entriesOfFriends) >= 10 {
 			break
 		}
@@ -386,6 +385,7 @@ LIMIT 10`, user.ID)
 	}
 	rows.Close()
 
+	// count friends
 	rows, err = db.Query(`SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC`, user.ID, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
@@ -666,6 +666,7 @@ LIMIT 50`, user.ID)
 	rows.Close()
 	render(w, r, http.StatusOK, "footprints.html", struct{ Footprints []Footprint }{footprints})
 }
+
 func GetFriends(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -715,19 +716,10 @@ func PostFriends(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetInitialize(w http.ResponseWriter, r *http.Request) {
-	c := make(chan struct{}, 4)
-	go func() { db.Exec("DELETE FROM relations WHERE id > 500000"); c <- struct{}{} }()
-	go func() { db.Exec("DELETE FROM footprints WHERE id > 500000"); c <- struct{}{} }()
-	go func() { db.Exec("DELETE FROM entries WHERE id > 500000"); c <- struct{}{} }()
-	go func() { db.Exec("DELETE FROM comments WHERE id > 1500000"); c <- struct{}{} }()
-	<-c
-	<-c
-	<-c
-	<-c
-	// db.Exec("DELETE FROM relations WHERE id > 500000")
-	// db.Exec("DELETE FROM footprints WHERE id > 500000")
-	// db.Exec("DELETE FROM entries WHERE id > 500000")
-	// db.Exec("DELETE FROM comments WHERE id > 1500000")
+	db.Exec("DELETE FROM relations WHERE id > 500000")
+	db.Exec("DELETE FROM footprints WHERE id > 500000")
+	db.Exec("DELETE FROM entries WHERE id > 500000")
+	db.Exec("DELETE FROM comments WHERE id > 1500000")
 }
 
 func main() {
@@ -794,14 +786,25 @@ func main() {
 	r.HandleFunc("/", myHandler(GetIndex))
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../static")))
 
-	// FIXME: change perm
-	// lll, _ := net.Listen("unix", "/tmp/isucon_go.sock")
-	lll, _ := net.ListenUnix("unix", &net.UnixAddr{"/tmp/isucon_go.sock", "unix"})
-	defer os.Remove("/tmp/isucon_go.sock")
-	// log.Fatal(http.Serve(lll, r))
-	log.Fatal(http.Serve(lll, r))
-
+	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", r))
 	// log.Fatal(http.ListenAndServe(":8080", r))
+}
+
+func unixSocketServe(path string, handler http.Handler) error {
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		os.Remove(path)
+	}
+
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{path, "unix"})
+	if err != nil {
+		panic(err)
+	}
+
+	if err := os.Chmod(path, 0777); err != nil {
+		panic(err)
+	}
+
+	return http.Serve(listener, handler)
 }
 
 func checkErr(err error) {
