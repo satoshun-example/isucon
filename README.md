@@ -19,12 +19,6 @@ wrk -t2 -c100 -d5 http://127.0.0.1:8081
 wrk -t2 -c100 -d5 -H "Accept-Encoding: gzip, deflate" http://127.0.0.1:8081
 ```
 
-myprofiler
-
-```shell
-alp -user=root -interval=0.2 -delay=10 #-top=30
-```
-
 alp
 
 ```shell

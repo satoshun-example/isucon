@@ -158,7 +158,7 @@ func getUserFromAccount(w http.ResponseWriter, name string) *User {
 func isFriend(w http.ResponseWriter, r *http.Request, anotherID int) bool {
 	session := getSession(w, r)
 	id := session.Values["user_id"]
-	row := db.QueryRow(`SELECT COUNT(1) AS cnt FROM relations WHERE (one = ? AND another = ?) OR (one = ? AND another = ?)`, id, anotherID, anotherID, id)
+	row := db.QueryRow(`SELECT COUNT(1) AS cnt FROM relations WHERE (one = ? AND another = ?)`, id, anotherID)
 	cnt := new(int)
 	err := row.Scan(cnt)
 	checkErr(err)
@@ -326,7 +326,10 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 
-		rows, err := db.Query(`SELECT id FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`, user.ID)
+		rows, err := db.Query(`
+SELECT id, body FROM entries
+WHERE user_id = ?
+ORDER BY created_at LIMIT 5`, user.ID)
 		defer rows.Close()
 		if err != sql.ErrNoRows {
 			checkErr(err)
@@ -334,8 +337,9 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 
 		for rows.Next() {
 			var id int
-			checkErr(rows.Scan(&id))
-			entries = append(entries, Entry{ID: id})
+			var body string
+			checkErr(rows.Scan(&id, &body))
+			entries = append(entries, Entry{ID: id, Title: strings.SplitN(body, "\n", 2)[0]})
 		}
 	}()
 
@@ -371,7 +375,9 @@ LIMIT 10`, user.ID)
 	go func() {
 		defer wg.Done()
 
-		rows, err := db.Query(`SELECT id, user_id, body, created_at FROM entries ORDER BY created_at DESC LIMIT 1000`)
+		rows, err := db.Query(`
+SELECT id, user_id, body, created_at FROM entries
+ORDER BY created_at DESC LIMIT 1000`)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
@@ -397,7 +403,9 @@ LIMIT 10`, user.ID)
 	go func() {
 		wg.Done()
 
-		rows, err := db.Query(`SELECT * FROM comments ORDER BY created_at DESC LIMIT 1000`)
+		rows, err := db.Query(`
+SELECT * FROM comments
+ORDER BY created_at DESC LIMIT 1000`)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
@@ -431,7 +439,10 @@ LIMIT 10`, user.ID)
 	go func() {
 		defer wg.Done()
 		// count friends
-		rows, err := db.Query(`SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC`, user.ID, user.ID)
+		rows, err := db.Query(`
+SELECT * FROM relations
+WHERE one = ? OR another = ?
+ORDER BY created_at DESC`, user.ID, user.ID)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
