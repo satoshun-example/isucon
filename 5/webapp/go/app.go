@@ -3,9 +3,9 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"html/template"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path"
@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/garyburd/redigo/redis"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/context"
 	"github.com/gorilla/mux"
@@ -23,6 +24,7 @@ import (
 
 var (
 	db    *sql.DB
+	pool  *redis.Pool
 	store *sessions.CookieStore
 )
 
@@ -84,7 +86,8 @@ var (
 )
 
 func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) {
-	query := `SELECT u.id AS id, u.account_name AS account_name, u.nick_name AS nick_name, u.email AS email
+	query := `
+SELECT u.id AS id, u.account_name AS account_name, u.nick_name AS nick_name, u.email AS email
 FROM users u
 JOIN salts s ON u.id = s.user_id
 WHERE u.email = ? AND u.passhash = SHA2(CONCAT(?, s.salt), 512)`
@@ -300,6 +303,14 @@ type IComment struct {
 	CreatedAt   time.Time
 }
 
+type IEntry struct {
+	ID          int
+	Title       string
+	AccountName string
+	NickName    string
+	CreatedAt   time.Time
+}
+
 func GetIndex(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -371,29 +382,53 @@ LIMIT 10`, user.ID)
 	}()
 
 	wg.Add(1)
-	entriesOfFriends := make([]Entry, 0, 10)
+	entriesOfFriends := make([]IEntry, 0, 10)
 	go func() {
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT id, user_id, body, created_at FROM entries
-ORDER BY created_at DESC LIMIT 1000`)
+SELECT id, user_id FROM entries
+ORDER BY created_at DESC
+LIMIT 1000`)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
+		ids := make([]string, 0, 10)
 		for rows.Next() {
 			var id, userID int
-			var body string
-			var createdAt time.Time
-			checkErr(rows.Scan(&id, &userID, &body, &createdAt))
+			checkErr(rows.Scan(&id, &userID))
+			// FIXME
 			if !isFriend(w, r, userID) {
 				continue
 			}
 
-			entriesOfFriends = append(entriesOfFriends, Entry{ID: id, UserID: userID, Title: strings.SplitN(body, "\n", 2)[0], Content: strings.SplitN(body, "\n", 2)[1], CreatedAt: createdAt})
-			if len(entriesOfFriends) >= 10 {
+			ids = append(ids, strconv.Itoa(id))
+			if len(ids) >= 10 {
 				break
 			}
+		}
+		rows.Close()
+
+		rows, err = db.Query(fmt.Sprintf(`
+SELECT e.id, e.body, e.created_at, u.account_name, u.nick_name
+FROM entries e
+INNER JOIN users u ON u.id = e.user_id
+WHERE e.id IN (%s)
+ORDER BY created_at DESC`, strings.Join(ids, ",")))
+		for rows.Next() {
+			var id int
+			var body, accountName, nickName string
+			var createdAt time.Time
+			checkErr(rows.Scan(&id, &body, &createdAt, &accountName, &nickName))
+
+			entriesOfFriends = append(entriesOfFriends,
+				IEntry{
+					ID:          id,
+					Title:       strings.SplitN(body, "\n", 2)[0],
+					CreatedAt:   createdAt,
+					AccountName: accountName,
+					NickName:    nickName,
+				})
 		}
 		rows.Close()
 	}()
@@ -473,7 +508,8 @@ ORDER BY created_at DESC`, user.ID, user.ID)
 	footprints := make([]Footprint, 0, 10)
 	go func() {
 		defer wg.Done()
-		rows, err := db.Query(`SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
+		rows, err := db.Query(`
+SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
 FROM footprints
 WHERE user_id = ?
 GROUP BY user_id, owner_id, DATE(created_at)
@@ -496,7 +532,7 @@ LIMIT 10`, user.ID)
 		Profile           Profile
 		Entries           []Entry
 		CommentsForMe     []IComment
-		EntriesOfFriends  []Entry
+		EntriesOfFriends  []IEntry
 		CommentsOfFriends []Comment
 		Friends           []Friend
 		Footprints        []Footprint
@@ -560,7 +596,8 @@ func PostProfile(w http.ResponseWriter, r *http.Request) {
 	if account != user.AccountName {
 		checkErr(ErrPermissionDenied)
 	}
-	query := `UPDATE profiles
+	query := `
+UPDATE profiles
 SET first_name=?, last_name=?, sex=?, birthday=?, pref=?, updated_at=CURRENT_TIMESTAMP()
 WHERE user_id = ?`
 	birth := r.FormValue("birthday")
@@ -712,7 +749,8 @@ func GetFootprints(w http.ResponseWriter, r *http.Request) {
 
 	user := getCurrentUser(w, r)
 	footprints := make([]Footprint, 0, 50)
-	rows, err := db.Query(`SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) as updated
+	rows, err := db.Query(`
+SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) as updated
 FROM footprints
 WHERE user_id = ?
 GROUP BY user_id, owner_id, DATE(created_at)
@@ -788,37 +826,20 @@ func GetInitialize(w http.ResponseWriter, r *http.Request) {
 func main() {
 	runtime.GOMAXPROCS(4)
 
-	host := os.Getenv("ISUCON5_DB_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-	portstr := os.Getenv("ISUCON5_DB_PORT")
-	if portstr == "" {
-		portstr = "3306"
-	}
-	user := os.Getenv("ISUCON5_DB_USER")
-	if user == "" {
-		user = "root"
-	}
-	password := os.Getenv("ISUCON5_DB_PASSWORD")
-	dbname := os.Getenv("ISUCON5_DB_NAME")
-	if dbname == "" {
-		dbname = "isucon5q"
-	}
-	ssecret := os.Getenv("ISUCON5_SESSION_SECRET")
-	if ssecret == "" {
-		ssecret = "beermoris"
-	}
-
 	var err error
-
-	// db, err = sql.Open("mysql", user+":"+password+"@tcp("+host+":"+strconv.Itoa(port)+")/"+dbname+"?loc=Local&parseTime=true")
-	db, err = sql.Open("mysql", user+":"+password+"@unix(/var/run/mysqld/mysqld.sock)/"+dbname+"?loc=Local&parseTime=true")
+	db, err = createDB()
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
 
+	pool = newRedisPool("/tmp/redis.sock", 100)
+	defer pool.Close()
+
+	ssecret := os.Getenv("ISUCON5_SESSION_SECRET")
+	if ssecret == "" {
+		ssecret = "beermoris"
+	}
 	store = sessions.NewCookieStore([]byte(ssecret))
 
 	r := mux.NewRouter()
@@ -850,23 +871,6 @@ func main() {
 
 	log.Fatal(unixSocketServe("/tmp/isucon_go.sock", r))
 	// log.Fatal(http.ListenAndServe(":8080", r))
-}
-
-func unixSocketServe(path string, handler http.Handler) error {
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		os.Remove(path)
-	}
-
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{path, "unix"})
-	if err != nil {
-		panic(err)
-	}
-
-	if err := os.Chmod(path, 0777); err != nil {
-		panic(err)
-	}
-
-	return http.Serve(listener, handler)
 }
 
 func checkErr(err error) {
