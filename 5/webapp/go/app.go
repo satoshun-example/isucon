@@ -264,12 +264,6 @@ func render(w http.ResponseWriter, r *http.Request, status int, file string, dat
 			checkErr(row.Scan(&entryID, &userID, &private, &body, &createdAt))
 			return Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
 		},
-		"numComments": func(id int) int {
-			row := db.QueryRow(`SELECT COUNT(*) AS c FROM comments WHERE entry_id = ?`, id)
-			var n int
-			checkErr(row.Scan(&n))
-			return n
-		},
 	}
 	tpl := template.Must(template.New(file).Funcs(fmap).ParseFiles(getTemplatePath(file), getTemplatePath("header.html")))
 	w.WriteHeader(status)
@@ -585,6 +579,15 @@ WHERE user_id = ?`
 	http.Redirect(w, r, "/profile/"+account, http.StatusSeeOther)
 }
 
+type LEntry struct {
+	ID        int
+	Private   bool
+	Title     string
+	Content   string
+	Count     int
+	CreatedAt time.Time
+}
+
 func ListEntries(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -594,21 +597,37 @@ func ListEntries(w http.ResponseWriter, r *http.Request) {
 	owner := getUserFromAccount(w, account)
 	var query string
 	if permitted(w, r, owner.ID) {
-		query = `SELECT * FROM entries WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
+		query = `
+SELECT e.id, e.private, e.body, e.created_at,
+	   (SELECT COUNT(*) FROM comments c WHERE c.entry_id = e.id) as count
+FROM entries e
+WHERE e.user_id = ?
+ORDER BY e.created_at DESC
+LIMIT 20`
 	} else {
-		query = `SELECT * FROM entries WHERE user_id = ? AND private=0 ORDER BY created_at DESC LIMIT 20`
+		query = `
+SELECT e.id, e.private, e.body, e.created_at,
+	   (SELECT COUNT(*) FROM comments c WHERE c.entry_id = e.id) as count
+FROM entries e
+WHERE e.user_id = ? AND private = 0
+ORDER BY e.created_at DESC
+LIMIT 20`
 	}
 	rows, err := db.Query(query, owner.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
-	entries := make([]Entry, 0, 20)
+	entries := make([]LEntry, 0, 20)
 	for rows.Next() {
-		var id, userID, private int
+		var id, private, count int
 		var body string
 		var createdAt time.Time
-		checkErr(rows.Scan(&id, &userID, &private, &body, &createdAt))
-		entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
+		checkErr(rows.Scan(&id, &private, &body, &createdAt, &count))
+		entry := LEntry{ID: id, Private: private == 1,
+			Title:     strings.SplitN(body, "\n", 2)[0],
+			Content:   strings.SplitN(body, "\n", 2)[1],
+			CreatedAt: createdAt,
+			Count:     count}
 		entries = append(entries, entry)
 	}
 	rows.Close()
@@ -617,7 +636,7 @@ func ListEntries(w http.ResponseWriter, r *http.Request) {
 
 	render(w, r, http.StatusOK, "entries.html", struct {
 		Owner   *User
-		Entries []Entry
+		Entries []LEntry
 		Myself  bool
 	}{owner, entries, getCurrentUser(w, r).ID == owner.ID})
 }
