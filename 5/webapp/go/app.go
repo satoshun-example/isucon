@@ -422,17 +422,21 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT entry_id, user_id, comment, created_at FROM comments
-ORDER BY created_at DESC LIMIT 1000`)
+SELECT c.entry_id, c.user_id, c.comment, c.created_at
+FROM (SELECT entry_id, user_id, comment, created_at FROM comments
+      ORDER BY created_at
+      DESC LIMIT 1000) as c
+INNER JOIN relations r ON r.one = c.user_id
+WHERE r.another = ?
+ORDER BY created_at DESC`, user.ID)
+
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
 		for rows.Next() {
 			c := Comment{}
 			checkErr(rows.Scan(&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
-			if !isFriend(w, r, c.UserID) {
-				continue
-			}
+
 			row := db.QueryRow(`SELECT * FROM entries WHERE id = ?`, c.EntryID)
 			var id, userID, private int
 			var body string
