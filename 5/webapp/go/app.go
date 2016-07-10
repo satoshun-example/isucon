@@ -302,6 +302,12 @@ type IComment struct {
 	CreatedAt   time.Time
 }
 
+type IFootPrint struct {
+	AccountName string
+	NickName    string
+	CreatedAt   time.Time
+}
+
 type IEntry struct {
 	ID          int
 	Title       string
@@ -472,22 +478,23 @@ WHERE one = ?`, user.ID)
 	}()
 
 	wg.Add(1)
-	footprints := make([]Footprint, 0, 10)
+	footprints := make([]IFootPrint, 0, 10)
 	go func() {
 		defer wg.Done()
 		rows, err := db.Query(`
-SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
-FROM footprints
-WHERE user_id = ?
-GROUP BY user_id, owner_id, DATE(created_at)
+SELECT DATE(f.created_at) AS date, MAX(f.created_at) AS updated, u.account_name, u.nick_name
+FROM footprints f
+INNER JOIN users u ON u.id = f.owner_id
+WHERE f.user_id = ?
+GROUP BY user_id, f.owner_id, DATE(f.created_at), u.account_name, u.nick_name
 ORDER BY updated DESC
 LIMIT 10`, user.ID)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
 		for rows.Next() {
-			fp := Footprint{}
-			checkErr(rows.Scan(&fp.UserID, &fp.OwnerID, &fp.CreatedAt, &fp.Updated))
+			fp := IFootPrint{}
+			checkErr(rows.Scan(&fp.CreatedAt, &time.Time{}, &fp.AccountName, &fp.NickName))
 			footprints = append(footprints, fp)
 		}
 		rows.Close()
@@ -502,7 +509,7 @@ LIMIT 10`, user.ID)
 		EntriesOfFriends  []IEntry
 		CommentsOfFriends []FriendComment
 		Friends           int
-		Footprints        []Footprint
+		Footprints        []IFootPrint
 	}{
 		*user, prof, entries, commentsForMe, entriesOfFriends, commentsOfFriends, friends, footprints,
 	})
