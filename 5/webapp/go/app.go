@@ -716,30 +716,37 @@ func PostComment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/diary/entry/"+strconv.Itoa(entry.ID), http.StatusSeeOther)
 }
 
+type FFootprint struct {
+	NickName    string
+	AccountName string
+	Updated     time.Time
+}
+
 func GetFootprints(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
 	}
 
 	user := getCurrentUser(w, r)
-	footprints := make([]Footprint, 0, 50)
+	footprints := make([]FFootprint, 0, 50)
 	rows, err := db.Query(`
-SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) as updated
-FROM footprints
-WHERE user_id = ?
-GROUP BY user_id, owner_id, DATE(created_at)
+SELECT MAX(f.created_at) as updated, u.account_name, u.nick_name
+FROM footprints f
+INNER JOIN users u ON u.id = f.owner_id
+WHERE f.user_id = ?
+GROUP BY f.user_id, f.owner_id, DATE(f.created_at), u.account_name, u.nick_name
 ORDER BY updated DESC
 LIMIT 50`, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
 	for rows.Next() {
-		fp := Footprint{}
-		checkErr(rows.Scan(&fp.UserID, &fp.OwnerID, &fp.CreatedAt, &fp.Updated))
+		fp := FFootprint{}
+		checkErr(rows.Scan(&fp.Updated, &fp.AccountName, &fp.NickName))
 		footprints = append(footprints, fp)
 	}
 	rows.Close()
-	render(w, r, http.StatusOK, "footprints.html", struct{ Footprints []Footprint }{footprints})
+	render(w, r, http.StatusOK, "footprints.html", struct{ Footprints []FFootprint }{footprints})
 }
 
 type FFriend struct {
