@@ -742,37 +742,35 @@ LIMIT 50`, user.ID)
 	render(w, r, http.StatusOK, "footprints.html", struct{ Footprints []Footprint }{footprints})
 }
 
+type FFriend struct {
+	AccountName string
+	NickName    string
+	CreatedAt   time.Time
+}
+
 func GetFriends(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
 	}
 
 	user := getCurrentUser(w, r)
-	rows, err := db.Query(`SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC`, user.ID, user.ID)
+	rows, err := db.Query(`
+SELECT r.created_at, u.account_name, u.nick_name
+FROM relations r
+INNER JOIN users u ON u.id = r.another
+WHERE r.one = ?
+ORDER BY r.created_at DESC`, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
-	friendsMap := make(map[int]time.Time)
+	friends := make([]FFriend, 0, 10)
 	for rows.Next() {
-		var id, one, another int
-		var createdAt time.Time
-		checkErr(rows.Scan(&id, &one, &another, &createdAt))
-		var friendID int
-		if one == user.ID {
-			friendID = another
-		} else {
-			friendID = one
-		}
-		if _, ok := friendsMap[friendID]; !ok {
-			friendsMap[friendID] = createdAt
-		}
+		var friend FFriend
+		checkErr(rows.Scan(&friend.CreatedAt, &friend.AccountName, &friend.NickName))
+		friends = append(friends, friend)
 	}
 	rows.Close()
-	friends := make([]Friend, 0, len(friendsMap))
-	for key, val := range friendsMap {
-		friends = append(friends, Friend{key, val})
-	}
-	render(w, r, http.StatusOK, "friends.html", struct{ Friends []Friend }{friends})
+	render(w, r, http.StatusOK, "friends.html", struct{ Friends []FFriend }{friends})
 }
 
 func PostFriends(w http.ResponseWriter, r *http.Request) {
