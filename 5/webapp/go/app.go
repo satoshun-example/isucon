@@ -135,6 +135,15 @@ func authenticated(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+func authenticated2(w http.ResponseWriter, r *http.Request) *User {
+	user := getCurrentUser(w, r)
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return nil
+	}
+	return user
+}
+
 func getUser(w http.ResponseWriter, userID int) *User {
 	row := db.QueryRow(`SELECT * FROM users WHERE id = ?`, userID)
 	user := User{}
@@ -432,7 +441,8 @@ LIMIT 10`, user.ID)
 
 		rows, err := db.Query(`
 SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id,
-(CASE WHEN e.private = 1 AND NOT EXISTS (SELECT COUNT(1) FROM relations rr WHERE rr.one = c.user_id AND rr.another = e.user_id) THEN 0 ELSE 1 END)
+(CASE WHEN e.private = 1 AND NOT EXISTS (SELECT * FROM relations rr WHERE rr.one = c.user_id AND rr.another = e.user_id) THEN 0
+	  ELSE 1 END)
 FROM (SELECT entry_id, user_id, comment, created_at FROM comments
       ORDER BY created_at
       DESC LIMIT 1000) as c
@@ -641,45 +651,70 @@ LIMIT 20`
 	}{owner, entries, getCurrentUser(w, r).ID == owner.ID})
 }
 
+type EComment struct {
+	Comment     string
+	NickName    string
+	AccountName string
+	CreatedAt   time.Time
+}
+
+type EOwner struct {
+	id       int
+	NickName string
+}
+
 func GetEntry(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
 	entryID := mux.Vars(r)["entry_id"]
-	row := db.QueryRow(`SELECT * FROM entries WHERE id = ?`, entryID)
-	var id, userID, private int
+
+	row := db.QueryRow(`
+SELECT e.id, e.user_id, e.private, e.body, e.created_at, u.id, u.nick_name,
+(CASE WHEN e.user_id = ? THEN 1
+	  WHEN e.private = 1 AND NOT EXISTS (SELECT * FROM relations r WHERE r.one = e.user_id AND r.another = ?) THEN 0
+	  ELSE 1 END) as permitted
+FROM entries e
+INNER JOIN users u ON u.id = e.user_id
+WHERE e.id = ?`, user.ID, user.ID, entryID)
+	var id, userID, private, permit int
 	var body string
 	var createdAt time.Time
-	err := row.Scan(&id, &userID, &private, &body, &createdAt)
+	var owner EOwner
+	err := row.Scan(&id, &userID, &private, &body, &createdAt, &owner.id, &owner.NickName, &permit)
 	if err == sql.ErrNoRows {
 		checkErr(ErrContentNotFound)
 	}
 	checkErr(err)
-	entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
-	owner := getUser(w, entry.UserID)
-	if entry.Private {
-		if !permitted(w, r, owner.ID) {
-			checkErr(ErrPermissionDenied)
-		}
+	if permit == 0 {
+		checkErr(ErrPermissionDenied)
 	}
-	rows, err := db.Query(`SELECT * FROM comments WHERE entry_id = ?`, entry.ID)
+
+	entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
+
+	rows, err := db.Query(`
+SELECT c.comment, c.created_at, u.nick_name, u.account_name
+FROM comments c
+INNER JOIN users u ON u.id = c.user_id
+WHERE c.entry_id = ?`, entry.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
-	comments := make([]Comment, 0, 10)
+	comments := make([]EComment, 0, 10)
 	for rows.Next() {
-		c := Comment{}
-		checkErr(rows.Scan(&c.ID, &c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
+		c := EComment{}
+		checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
 		comments = append(comments, c)
 	}
 	rows.Close()
 
-	markFootprint(w, r, owner.ID)
+	markFootprint(w, r, owner.id)
 
 	render(w, r, http.StatusOK, "entry.html", struct {
-		Owner    *User
+		Owner    EOwner
 		Entry    Entry
-		Comments []Comment
+		Comments []EComment
 	}{owner, entry, comments})
 }
 
