@@ -387,25 +387,23 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT id, user_id FROM entries
-ORDER BY created_at DESC
-LIMIT 1000`)
+SELECT e.id FROM relations r
+INNER JOIN (SELECT id, user_id, created_at FROM entries
+	ORDER BY created_at DESC
+	LIMIT 1000) as e ON e.user_id = r.one
+WHERE r.another = ?
+ORDER BY e.created_at DESC
+LIMIT 10`, user.ID)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
+
 		ids := make([]string, 0, 10)
 		for rows.Next() {
-			var id, userID int
-			checkErr(rows.Scan(&id, &userID))
-			// FIXME
-			if !isFriend(w, r, userID) {
-				continue
-			}
+			var id int
 
+			checkErr(rows.Scan(&id))
 			ids = append(ids, strconv.Itoa(id))
-			if len(ids) >= 10 {
-				break
-			}
 		}
 		rows.Close()
 
@@ -436,17 +434,17 @@ ORDER BY created_at DESC`, strings.Join(ids, ",")))
 	wg.Add(1)
 	commentsOfFriends := make([]Comment, 0, 10)
 	go func() {
-		wg.Done()
+		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT * FROM comments
+SELECT entry_id, user_id, comment, created_at FROM comments
 ORDER BY created_at DESC LIMIT 1000`)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
 		for rows.Next() {
 			c := Comment{}
-			checkErr(rows.Scan(&c.ID, &c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
+			checkErr(rows.Scan(&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
 			if !isFriend(w, r, c.UserID) {
 				continue
 			}
