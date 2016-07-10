@@ -464,38 +464,14 @@ ORDER BY created_at DESC`, user.ID)
 	}()
 
 	wg.Add(1)
-	friends := make([]Friend, 0, 10)
+	friends := 0
 	go func() {
 		defer wg.Done()
 		// count friends
-		rows, err := db.Query(`
-SELECT * FROM relations
-WHERE one = ? OR another = ?
-ORDER BY created_at DESC`, user.ID, user.ID)
-		if err != sql.ErrNoRows {
-			checkErr(err)
-		}
-
-		friendsMap := make(map[int]time.Time)
-		for rows.Next() {
-			var id, one, another int
-			var createdAt time.Time
-			checkErr(rows.Scan(&id, &one, &another, &createdAt))
-			var friendID int
-			if one == user.ID {
-				friendID = another
-			} else {
-				friendID = one
-			}
-			if _, ok := friendsMap[friendID]; !ok {
-				friendsMap[friendID] = createdAt
-			}
-		}
-
-		for key, val := range friendsMap {
-			friends = append(friends, Friend{key, val})
-		}
-		rows.Close()
+		row := db.QueryRow(`
+SELECT COUNT(*) FROM relations
+WHERE one = ?`, user.ID)
+		row.Scan(&friends)
 	}()
 
 	wg.Add(1)
@@ -528,7 +504,7 @@ LIMIT 10`, user.ID)
 		CommentsForMe     []IComment
 		EntriesOfFriends  []IEntry
 		CommentsOfFriends []FriendComment
-		Friends           []Friend
+		Friends           int
 		Footprints        []Footprint
 	}{
 		*user, prof, entries, commentsForMe, entriesOfFriends, commentsOfFriends, friends, footprints,
