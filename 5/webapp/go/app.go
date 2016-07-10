@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -387,10 +386,11 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT e.id FROM relations r
-INNER JOIN (SELECT id, user_id, created_at FROM entries
+SELECT e.id, e.body, e.created_at, u.account_name, u.nick_name FROM relations r
+INNER JOIN (SELECT id, body, user_id, created_at FROM entries
 	ORDER BY created_at DESC
 	LIMIT 1000) as e ON e.user_id = r.one
+INNER JOIN users u ON e.user_id = u.id
 WHERE r.another = ?
 ORDER BY e.created_at DESC
 LIMIT 10`, user.ID)
@@ -398,21 +398,6 @@ LIMIT 10`, user.ID)
 			checkErr(err)
 		}
 
-		ids := make([]string, 0, 10)
-		for rows.Next() {
-			var id int
-
-			checkErr(rows.Scan(&id))
-			ids = append(ids, strconv.Itoa(id))
-		}
-		rows.Close()
-
-		rows, err = db.Query(fmt.Sprintf(`
-SELECT e.id, e.body, e.created_at, u.account_name, u.nick_name
-FROM entries e
-INNER JOIN users u ON u.id = e.user_id
-WHERE e.id IN (%s)
-ORDER BY created_at DESC`, strings.Join(ids, ",")))
 		for rows.Next() {
 			var id int
 			var body, accountName, nickName string
