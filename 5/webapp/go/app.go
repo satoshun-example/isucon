@@ -431,34 +431,31 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id, e.private
+SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id,
+(CASE WHEN e.private = 1 AND NOT EXISTS (SELECT COUNT(1) FROM relations rr WHERE rr.one = c.user_id AND rr.another = e.user_id) THEN 0 ELSE 1 END)
 FROM (SELECT entry_id, user_id, comment, created_at FROM comments
       ORDER BY created_at
       DESC LIMIT 1000) as c
 INNER JOIN relations r ON r.one = c.user_id
 INNER JOIN entries e ON e.id = c.entry_id
 WHERE r.another = ?
-ORDER BY created_at DESC`, user.ID)
+ORDER BY created_at DESC
+LIMIT 10`, user.ID)
 
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
 		for rows.Next() {
 			c := FriendComment{}
-			var private int
+			var permitted int
 			checkErr(rows.Scan(
 				&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt,
-				&c.EntryUserID, &private))
+				&c.EntryUserID, &permitted))
 
-			// FIXME
-			// プレイベートかつ, このエントリの投稿が友達でない
-			if private == 1 && !permitted(w, r, c.EntryUserID) {
+			if permitted == 0 {
 				continue
 			}
 			commentsOfFriends = append(commentsOfFriends, c)
-			if len(commentsOfFriends) >= 10 {
-				break
-			}
 		}
 		rows.Close()
 	}()
