@@ -422,11 +422,12 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT c.entry_id, c.user_id, c.comment, c.created_at
+SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id, e.private
 FROM (SELECT entry_id, user_id, comment, created_at FROM comments
       ORDER BY created_at
       DESC LIMIT 1000) as c
 INNER JOIN relations r ON r.one = c.user_id
+INNER JOIN entries e ON e.id = c.entry_id
 WHERE r.another = ?
 ORDER BY created_at DESC`, user.ID)
 
@@ -435,18 +436,14 @@ ORDER BY created_at DESC`, user.ID)
 		}
 		for rows.Next() {
 			c := Comment{}
-			checkErr(rows.Scan(&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt))
+			var userID, private int
+			checkErr(rows.Scan(
+				&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt,
+				&userID, &private))
 
-			row := db.QueryRow(`SELECT * FROM entries WHERE id = ?`, c.EntryID)
-			var id, userID, private int
-			var body string
-			var createdAt time.Time
-			checkErr(row.Scan(&id, &userID, &private, &body, &createdAt))
-			entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
-			if entry.Private {
-				if !permitted(w, r, entry.UserID) {
-					continue
-				}
+			// プレイベートかつ, このエントリの投稿が友達でない
+			if private == 1 && !permitted(w, r, userID) {
+				continue
 			}
 			commentsOfFriends = append(commentsOfFriends, c)
 			if len(commentsOfFriends) >= 10 {
