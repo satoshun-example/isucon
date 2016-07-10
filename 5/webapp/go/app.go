@@ -310,6 +310,15 @@ type IEntry struct {
 	CreatedAt   time.Time
 }
 
+type FriendComment struct {
+	ID          int
+	EntryID     int
+	UserID      int
+	Comment     string
+	EntryUserID int
+	CreatedAt   time.Time
+}
+
 func GetIndex(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -417,7 +426,7 @@ LIMIT 10`, user.ID)
 	}()
 
 	wg.Add(1)
-	commentsOfFriends := make([]Comment, 0, 10)
+	commentsOfFriends := make([]FriendComment, 0, 10)
 	go func() {
 		defer wg.Done()
 
@@ -435,14 +444,15 @@ ORDER BY created_at DESC`, user.ID)
 			checkErr(err)
 		}
 		for rows.Next() {
-			c := Comment{}
-			var userID, private int
+			c := FriendComment{}
+			var private int
 			checkErr(rows.Scan(
 				&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt,
-				&userID, &private))
+				&c.EntryUserID, &private))
 
+			// FIXME
 			// プレイベートかつ, このエントリの投稿が友達でない
-			if private == 1 && !permitted(w, r, userID) {
+			if private == 1 && !permitted(w, r, c.EntryUserID) {
 				continue
 			}
 			commentsOfFriends = append(commentsOfFriends, c)
@@ -517,7 +527,7 @@ LIMIT 10`, user.ID)
 		Entries           []Entry
 		CommentsForMe     []IComment
 		EntriesOfFriends  []IEntry
-		CommentsOfFriends []Comment
+		CommentsOfFriends []FriendComment
 		Friends           []Friend
 		Footprints        []Footprint
 	}{
