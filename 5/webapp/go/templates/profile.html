@@ -37,11 +37,10 @@
   {{ end }}
 </div>
 
-{{ $currentUser := getCurrentUser .W .R }}
-{{ if eq $currentUser.ID .Owner.ID }}
+{{ if eq .User.ID .Owner.ID }}
 <h2>プロフィール更新</h2>
 <div id="profile-post-form">
-  <form method="POST" action="/profile/{{ $currentUser.AccountName }}">
+  <form method="POST" action="/profile/{{ .User.AccountName }}">
     <div>名字: <input type="text" name="last_name" placeholder="みょうじ" value="{{ .Profile.LastName }}" /></div>
     <div>名前: <input type="text" name="first_name" placeholder="なまえ" value="{{ .Profile.FirstName }}" /></div>
     <div>性別:
@@ -57,7 +56,7 @@
     </div>
     <div>住んでいる県:
       <select name="pref">
-        {{ range prefectures }}
+        {{ range .Prefectures }}
         <option {{ if eq $.Profile.Pref . }}selected{{ end }}>{{ . }}</option>
         {{ end }}
       </select>
@@ -65,7 +64,7 @@
     <div><input type="submit" value="更新" /></div>
   </form>
 </div>
-{{ else if not (isFriend .W .R .Owner.ID) }}
+{{ else if not .Private }}
 <h2>あなたは友だちではありません</h2>
 <div id="profile-friend-form">
   <form method="POST" action="/friends/{{ .Owner.AccountName }}">

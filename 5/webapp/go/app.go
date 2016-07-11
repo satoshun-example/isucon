@@ -28,15 +28,6 @@ var (
 	store *sessions.CookieStore
 
 	templates = template.Must(template.New("app").Funcs(template.FuncMap{
-		"getCurrentUser": func(w http.ResponseWriter, r *http.Request) *User {
-			return getCurrentUser(w, r)
-		},
-		"isFriend": func(w http.ResponseWriter, r *http.Request, id int) bool {
-			return isFriend(w, r, id)
-		},
-		"prefectures": func() []string {
-			return prefs
-		},
 		"substring": func(s string, l int) string {
 			if len(s) > l {
 				return s[:l]
@@ -146,16 +137,7 @@ func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
 	return &user
 }
 
-func authenticated(w http.ResponseWriter, r *http.Request) bool {
-	user := getCurrentUser(w, r)
-	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusFound)
-		return false
-	}
-	return true
-}
-
-func authenticated2(w http.ResponseWriter, r *http.Request) *User {
+func authenticated(w http.ResponseWriter, r *http.Request) *User {
 	user := getCurrentUser(w, r)
 	if user == nil {
 		http.Redirect(w, r, "/login", http.StatusFound)
@@ -196,17 +178,16 @@ func isFriend(w http.ResponseWriter, r *http.Request, anotherID int) bool {
 	return *cnt > 0
 }
 
-func isFriendAccount(w http.ResponseWriter, r *http.Request, name string) bool {
+func isFriendAccount(w http.ResponseWriter, r *http.Request, name string) (*User, bool) {
 	user := getUserFromAccount(w, name)
 	if user == nil {
-		return false
+		return nil, false
 	}
-	return isFriend(w, r, user.ID)
+	return user, isFriend(w, r, user.ID)
 }
 
-func permitted(w http.ResponseWriter, r *http.Request, anotherID int) bool {
-	user := getCurrentUser(w, r)
-	if anotherID == user.ID {
+func permitted(w http.ResponseWriter, r *http.Request, userID int, anotherID int) bool {
+	if anotherID == userID {
 		return true
 	}
 	return isFriend(w, r, anotherID)
@@ -328,7 +309,7 @@ type FriendCommentData struct {
 }
 
 func GetIndex(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -546,7 +527,8 @@ LIMIT 10`, user.ID)
 }
 
 func GetProfile(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated(w, r)
+	if user == nil {
 		return
 	}
 
@@ -559,7 +541,7 @@ func GetProfile(w http.ResponseWriter, r *http.Request) {
 		checkErr(err)
 	}
 	var query string
-	if permitted(w, r, owner.ID) {
+	if permitted(w, r, user.ID, owner.ID) {
 		query = `SELECT * FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5`
 	} else {
 		query = `SELECT * FROM entries WHERE user_id = ? AND private=0 ORDER BY created_at LIMIT 5`
@@ -582,19 +564,19 @@ func GetProfile(w http.ResponseWriter, r *http.Request) {
 	markFootprint(w, r, owner.ID)
 
 	render(w, r, http.StatusOK, "profile.html", struct {
-		Owner   User
-		Profile Profile
-		Entries []Entry
-		Private bool
-		W       http.ResponseWriter
-		R       *http.Request
+		Owner       User
+		Profile     Profile
+		Entries     []Entry
+		Private     bool
+		User        *User
+		Prefectures []string
 	}{
-		*owner, prof, entries, permitted(w, r, owner.ID), w, r,
+		*owner, prof, entries, permitted(w, r, user.ID, owner.ID), user, prefs,
 	})
 }
 
 func PostProfile(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -627,56 +609,71 @@ type LEntry struct {
 }
 
 func ListEntries(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated(w, r)
+	if user == nil {
 		return
 	}
 
 	account := mux.Vars(r)["account_name"]
 	owner := getUserFromAccount(w, account)
-	var query string
-	if permitted(w, r, owner.ID) {
-		query = `
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	entries := make([]LEntry, 0, 20)
+	go func() {
+		defer wg.Done()
+
+		var query string
+		if permitted(w, r, user.ID, owner.ID) {
+			query = `
 SELECT e.id, e.private, e.body, e.created_at,
 	   (SELECT COUNT(*) FROM comments c WHERE c.entry_id = e.id) as count
 FROM entries e
 WHERE e.user_id = ?
 ORDER BY e.created_at DESC
 LIMIT 20`
-	} else {
-		query = `
+		} else {
+			query = `
 SELECT e.id, e.private, e.body, e.created_at,
 	   (SELECT COUNT(*) FROM comments c WHERE c.entry_id = e.id) as count
 FROM entries e
 WHERE e.user_id = ? AND private = 0
 ORDER BY e.created_at DESC
 LIMIT 20`
-	}
-	rows, err := db.Query(query, owner.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	entries := make([]LEntry, 0, 20)
-	for rows.Next() {
-		var id, private, count int
-		var body string
-		var createdAt time.Time
-		checkErr(rows.Scan(&id, &private, &body, &createdAt, &count))
-		entry := LEntry{ID: id, Private: private == 1,
-			Title:     strings.SplitN(body, "\n", 2)[0],
-			Content:   strings.SplitN(body, "\n", 2)[1],
-			CreatedAt: createdAt,
-			Count:     count}
-		entries = append(entries, entry)
-	}
-	rows.Close()
+		}
 
-	markFootprint(w, r, owner.ID)
+		rows, err := db.Query(query, owner.ID)
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+		for rows.Next() {
+			var id, private, count int
+			var body string
+			var createdAt time.Time
+			checkErr(rows.Scan(&id, &private, &body, &createdAt, &count))
+			entry := LEntry{ID: id, Private: private == 1,
+				Title:     strings.SplitN(body, "\n", 2)[0],
+				Content:   strings.SplitN(body, "\n", 2)[1],
+				CreatedAt: createdAt,
+				Count:     count}
+			entries = append(entries, entry)
+		}
+		rows.Close()
+	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		markFootprint(w, r, owner.ID)
+	}()
+
+	wg.Wait()
 	render(w, r, http.StatusOK, "entries.html", struct {
 		Owner   *User
 		Entries []LEntry
 		Myself  bool
-	}{owner, entries, getCurrentUser(w, r).ID == owner.ID})
+	}{owner, entries, user.ID == owner.ID})
 }
 
 type EComment struct {
@@ -692,7 +689,7 @@ type EOwner struct {
 }
 
 func GetEntry(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -760,7 +757,7 @@ WHERE c.entry_id = ?`, entry.ID)
 }
 
 func PostEntry(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -782,7 +779,8 @@ func PostEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func PostComment(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated(w, r)
+	if user == nil {
 		return
 	}
 
@@ -800,11 +798,10 @@ func PostComment(w http.ResponseWriter, r *http.Request) {
 	entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
 	owner := getUser(w, entry.UserID)
 	if entry.Private {
-		if !permitted(w, r, owner.ID) {
+		if !permitted(w, r, user.ID, owner.ID) {
 			checkErr(ErrPermissionDenied)
 		}
 	}
-	user := getCurrentUser(w, r)
 
 	_, err = db.Exec(`INSERT INTO comments (entry_id, user_id, comment) VALUES (?,?,?)`, entry.ID, user.ID, r.FormValue("comment"))
 	checkErr(err)
@@ -818,7 +815,7 @@ type FFootprint struct {
 }
 
 func GetFootprints(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -851,7 +848,7 @@ type FFriend struct {
 }
 
 func GetFriends(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
@@ -875,14 +872,14 @@ ORDER BY r.created_at DESC`, user.ID)
 }
 
 func PostFriends(w http.ResponseWriter, r *http.Request) {
-	user := authenticated2(w, r)
+	user := authenticated(w, r)
 	if user == nil {
 		return
 	}
 
 	anotherAccount := mux.Vars(r)["account_name"]
-	if !isFriendAccount(w, r, anotherAccount) {
-		another := getUserFromAccount(w, anotherAccount)
+	another, isFriend := isFriendAccount(w, r, anotherAccount)
+	if !isFriend {
 		_, err := db.Exec(`INSERT INTO relations (one, another) VALUES (?,?), (?,?)`, user.ID, another.ID, another.ID, user.ID)
 		checkErr(err)
 		http.Redirect(w, r, "/friends", http.StatusSeeOther)
@@ -906,8 +903,8 @@ func main() {
 	}
 	defer db.Close()
 
-	pool = newRedisPool("/tmp/redis.sock", 100)
-	defer pool.Close()
+	// pool = newRedisPool("/tmp/redis.sock", 100)
+	// defer pool.Close()
 
 	ssecret := os.Getenv("ISUCON5_SESSION_SECRET")
 	if ssecret == "" {
