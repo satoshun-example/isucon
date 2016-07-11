@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -194,8 +195,12 @@ func permitted(w http.ResponseWriter, r *http.Request, anotherID int) bool {
 
 func markFootprint(w http.ResponseWriter, r *http.Request, id int) {
 	user := getCurrentUser(w, r)
-	if user.ID != id {
-		_, err := db.Exec(`INSERT INTO footprints (user_id,owner_id) VALUES (?,?)`, id, user.ID)
+	markFootprint2(user, id)
+}
+
+func markFootprint2(user *User, id int) {
+	if user != nil && user.ID != id {
+		_, err := db.Exec(`INSERT INTO footprints (user_id, owner_id) VALUES (?,?)`, id, user.ID)
 		checkErr(err)
 	}
 }
@@ -244,11 +249,9 @@ func getTemplatePath(file string) string {
 	return path.Join("templates", file)
 }
 
+// FIXME: remove this function
 func render(w http.ResponseWriter, r *http.Request, status int, file string, data interface{}) {
 	fmap := template.FuncMap{
-		"getUser": func(id int) *User {
-			return getUser(w, id)
-		},
 		"getCurrentUser": func() *User {
 			return getCurrentUser(w, r)
 		},
@@ -265,14 +268,6 @@ func render(w http.ResponseWriter, r *http.Request, status int, file string, dat
 			return s
 		},
 		"split": strings.Split,
-		"getEntry": func(id int) Entry {
-			row := db.QueryRow(`SELECT * FROM entries WHERE id=?`, id)
-			var entryID, userID, private int
-			var body string
-			var createdAt time.Time
-			checkErr(row.Scan(&entryID, &userID, &private, &body, &createdAt))
-			return Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
-		},
 	}
 	tpl := template.Must(template.New(file).Funcs(fmap).ParseFiles(getTemplatePath(file), getTemplatePath("header.html")))
 	w.WriteHeader(status)
@@ -326,6 +321,11 @@ type FriendComment struct {
 	Comment     string
 	EntryUserID int
 	CreatedAt   time.Time
+}
+
+type FriendCommentData struct {
+	NickName    string
+	AccountName string
 }
 
 func GetIndex(w http.ResponseWriter, r *http.Request) {
@@ -436,6 +436,7 @@ LIMIT 10`, user.ID)
 
 	wg.Add(1)
 	commentsOfFriends := make([]FriendComment, 0, 10)
+	commentsOfFriendsData := make(map[int]FriendCommentData)
 	go func() {
 		defer wg.Done()
 
@@ -455,6 +456,8 @@ LIMIT 10`, user.ID)
 		if err != sql.ErrNoRows {
 			checkErr(err)
 		}
+
+		ids := make(map[int]struct{})
 		for rows.Next() {
 			c := FriendComment{}
 			var permitted int
@@ -466,7 +469,34 @@ LIMIT 10`, user.ID)
 				continue
 			}
 			commentsOfFriends = append(commentsOfFriends, c)
+
+			ids[c.UserID] = struct{}{}
+			ids[c.EntryUserID] = struct{}{}
 		}
+
+		rows.Close()
+
+		keys := make([]string, 0, len(ids))
+		for key := range ids {
+			keys = append(keys, strconv.Itoa(key))
+		}
+
+		rows, err = db.Query(fmt.Sprintf(`
+SELECT id, nick_name, account_name
+FROM users
+WHERE id IN (%s)`, strings.Join(keys, ",")))
+
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+
+		for rows.Next() {
+			var id int
+			var data FriendCommentData
+			checkErr(rows.Scan(&id, &data.NickName, &data.AccountName))
+			commentsOfFriendsData[id] = data
+		}
+
 		rows.Close()
 	}()
 
@@ -506,16 +536,17 @@ LIMIT 10`, user.ID)
 
 	wg.Wait()
 	render(w, r, http.StatusOK, "index.html", struct {
-		User              User
-		Profile           Profile
-		Entries           []Entry
-		CommentsForMe     []IComment
-		EntriesOfFriends  []IEntry
-		CommentsOfFriends []FriendComment
-		Friends           int
-		Footprints        []IFootPrint
+		User                  User
+		Profile               Profile
+		Entries               []Entry
+		CommentsForMe         []IComment
+		EntriesOfFriends      []IEntry
+		CommentsOfFriends     []FriendComment
+		CommentsOfFriendsData map[int]FriendCommentData
+		Friends               int
+		Footprints            []IFootPrint
 	}{
-		*user, prof, entries, commentsForMe, entriesOfFriends, commentsOfFriends, friends, footprints,
+		*user, prof, entries, commentsForMe, entriesOfFriends, commentsOfFriends, commentsOfFriendsData, friends, footprints,
 	})
 }
 
@@ -693,23 +724,36 @@ WHERE e.id = ?`, user.ID, user.ID, entryID)
 
 	entry := Entry{id, userID, private == 1, strings.SplitN(body, "\n", 2)[0], strings.SplitN(body, "\n", 2)[1], createdAt}
 
-	rows, err := db.Query(`
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	comments := make([]EComment, 0, 10)
+	go func() {
+		defer wg.Done()
+
+		rows, err := db.Query(`
 SELECT c.comment, c.created_at, u.nick_name, u.account_name
 FROM comments c
 INNER JOIN users u ON u.id = c.user_id
 WHERE c.entry_id = ?`, entry.ID)
-	if err != sql.ErrNoRows {
-		checkErr(err)
-	}
-	comments := make([]EComment, 0, 10)
-	for rows.Next() {
-		c := EComment{}
-		checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
-		comments = append(comments, c)
-	}
-	rows.Close()
+		if err != sql.ErrNoRows {
+			checkErr(err)
+		}
+		for rows.Next() {
+			c := EComment{}
+			checkErr(rows.Scan(&c.Comment, &c.CreatedAt, &c.NickName, &c.AccountName))
+			comments = append(comments, c)
+		}
+		rows.Close()
+	}()
 
-	markFootprint(w, r, owner.id)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		markFootprint2(user, owner.id)
+	}()
+
+	wg.Wait()
 
 	render(w, r, http.StatusOK, "entry.html", struct {
 		Owner    EOwner
