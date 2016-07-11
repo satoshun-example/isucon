@@ -329,11 +329,10 @@ type FriendCommentData struct {
 }
 
 func GetIndex(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
-
-	user := getCurrentUser(w, r)
 
 	var wg sync.WaitGroup
 
@@ -342,7 +341,9 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 
-		row := db.QueryRow(`SELECT * FROM profiles WHERE user_id = ?`, user.ID)
+		row := db.QueryRow(`
+SELECT * FROM profiles
+WHERE user_id = ?`, user.ID)
 		err := row.Scan(&prof.UserID, &prof.FirstName, &prof.LastName, &prof.Sex, &prof.Birthday, &prof.Pref, &prof.UpdatedAt)
 		if err != sql.ErrNoRows {
 			checkErr(err)
@@ -441,15 +442,14 @@ LIMIT 10`, user.ID)
 		defer wg.Done()
 
 		rows, err := db.Query(`
-SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id,
-(CASE WHEN e.private = 1 AND NOT EXISTS (SELECT * FROM relations rr WHERE rr.one = c.user_id AND rr.another = e.user_id) THEN 0
-	  ELSE 1 END)
+SELECT c.entry_id, c.user_id, c.comment, c.created_at, e.user_id
 FROM (SELECT entry_id, user_id, comment, created_at FROM comments
       ORDER BY created_at
       DESC LIMIT 1000) as c
 INNER JOIN relations r ON r.one = c.user_id
 INNER JOIN entries e ON e.id = c.entry_id
-WHERE r.another = ?
+WHERE r.another = ? AND
+	  (e.private = 0 OR EXISTS (SELECT * FROM relations rr WHERE rr.one = c.user_id AND rr.another = e.user_id))
 ORDER BY created_at DESC
 LIMIT 10`, user.ID)
 
@@ -460,14 +460,10 @@ LIMIT 10`, user.ID)
 		ids := make(map[int]struct{})
 		for rows.Next() {
 			c := FriendComment{}
-			var permitted int
 			checkErr(rows.Scan(
 				&c.EntryID, &c.UserID, &c.Comment, &c.CreatedAt,
-				&c.EntryUserID, &permitted))
+				&c.EntryUserID))
 
-			if permitted == 0 {
-				continue
-			}
 			commentsOfFriends = append(commentsOfFriends, c)
 
 			ids[c.UserID] = struct{}{}
