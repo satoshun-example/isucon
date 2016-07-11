@@ -26,6 +26,25 @@ var (
 	db    *sql.DB
 	pool  *redis.Pool
 	store *sessions.CookieStore
+
+	templates = template.Must(template.New("app").Funcs(template.FuncMap{
+		"getCurrentUser": func(w http.ResponseWriter, r *http.Request) *User {
+			return getCurrentUser(w, r)
+		},
+		"isFriend": func(w http.ResponseWriter, r *http.Request, id int) bool {
+			return isFriend(w, r, id)
+		},
+		"prefectures": func() []string {
+			return prefs
+		},
+		"substring": func(s string, l int) string {
+			if len(s) > l {
+				return s[:l]
+			}
+			return s
+		},
+		"split": strings.Split,
+	}).ParseGlob("templates/*.html"))
 )
 
 type User struct {
@@ -249,29 +268,9 @@ func getTemplatePath(file string) string {
 	return path.Join("templates", file)
 }
 
-// FIXME: remove this function
 func render(w http.ResponseWriter, r *http.Request, status int, file string, data interface{}) {
-	fmap := template.FuncMap{
-		"getCurrentUser": func() *User {
-			return getCurrentUser(w, r)
-		},
-		"isFriend": func(id int) bool {
-			return isFriend(w, r, id)
-		},
-		"prefectures": func() []string {
-			return prefs
-		},
-		"substring": func(s string, l int) string {
-			if len(s) > l {
-				return s[:l]
-			}
-			return s
-		},
-		"split": strings.Split,
-	}
-	tpl := template.Must(template.New(file).Funcs(fmap).ParseFiles(getTemplatePath(file), getTemplatePath("header.html")))
 	w.WriteHeader(status)
-	checkErr(tpl.Execute(w, data))
+	checkErr(templates.ExecuteTemplate(w, file, data))
 }
 
 func GetLogin(w http.ResponseWriter, r *http.Request) {
@@ -587,16 +586,18 @@ func GetProfile(w http.ResponseWriter, r *http.Request) {
 		Profile Profile
 		Entries []Entry
 		Private bool
+		W       http.ResponseWriter
+		R       *http.Request
 	}{
-		*owner, prof, entries, permitted(w, r, owner.ID),
+		*owner, prof, entries, permitted(w, r, owner.ID), w, r,
 	})
 }
 
 func PostProfile(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
-	user := getCurrentUser(w, r)
 	account := mux.Vars(r)["account_name"]
 	if account != user.AccountName {
 		checkErr(ErrPermissionDenied)
@@ -759,11 +760,11 @@ WHERE c.entry_id = ?`, entry.ID)
 }
 
 func PostEntry(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
 
-	user := getCurrentUser(w, r)
 	title := r.FormValue("title")
 	if title == "" {
 		title = "タイトルなし"
@@ -817,11 +818,11 @@ type FFootprint struct {
 }
 
 func GetFootprints(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
 
-	user := getCurrentUser(w, r)
 	footprints := make([]FFootprint, 0, 50)
 	rows, err := db.Query(`
 SELECT MAX(f.created_at) as updated, u.account_name, u.nick_name
@@ -850,11 +851,10 @@ type FFriend struct {
 }
 
 func GetFriends(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
-
-	user := getCurrentUser(w, r)
 	rows, err := db.Query(`
 SELECT r.created_at, u.account_name, u.nick_name
 FROM relations r
@@ -875,11 +875,11 @@ ORDER BY r.created_at DESC`, user.ID)
 }
 
 func PostFriends(w http.ResponseWriter, r *http.Request) {
-	if !authenticated(w, r) {
+	user := authenticated2(w, r)
+	if user == nil {
 		return
 	}
 
-	user := getCurrentUser(w, r)
 	anotherAccount := mux.Vars(r)["account_name"]
 	if !isFriendAccount(w, r, anotherAccount) {
 		another := getUserFromAccount(w, anotherAccount)
