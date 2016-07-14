@@ -491,11 +491,11 @@ WHERE one = ?`, user.ID)
 	go func() {
 		defer wg.Done()
 		rows, err := db.Query(`
-SELECT DATE(f.created_at) AS date, MAX(f.created_at) AS updated, u.account_name, u.nick_name
+SELECT DATE(f.created_at) AS date, MAX(f.created_at) AS updated, MIN(u.account_name), MIN(u.nick_name)
 FROM footprints f
 INNER JOIN users u ON u.id = f.owner_id
 WHERE f.user_id = ?
-GROUP BY user_id, f.owner_id, DATE(f.created_at), u.account_name, u.nick_name
+GROUP BY user_id, f.owner_id, DATE(f.created_at)
 ORDER BY updated DESC
 LIMIT 10`, user.ID)
 		if err != sql.ErrNoRows {
@@ -821,11 +821,11 @@ func GetFootprints(w http.ResponseWriter, r *http.Request) {
 
 	footprints := make([]FFootprint, 0, 50)
 	rows, err := db.Query(`
-SELECT MAX(f.created_at) as updated, u.account_name, u.nick_name
+SELECT MAX(f.created_at) as updated, MIN(u.account_name), MIN(u.nick_name)
 FROM footprints f
 INNER JOIN users u ON u.id = f.owner_id
 WHERE f.user_id = ?
-GROUP BY f.user_id, f.owner_id, DATE(f.created_at), u.account_name, u.nick_name
+GROUP BY f.user_id, f.owner_id, DATE(f.created_at)
 ORDER BY updated DESC
 LIMIT 50`, user.ID)
 	if err != sql.ErrNoRows {
