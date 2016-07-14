@@ -4,14 +4,15 @@ CREATE TABLE IF NOT EXISTS users (
   `account_name` varchar(64) NOT NULL UNIQUE,
   `nick_name` varchar(32) NOT NULL,
   `email` varchar(255) CHARACTER SET utf8 NOT NULL UNIQUE,
-  `passhash` varchar(128) NOT NULL -- SHA2 512 non-binary (hex)
+  `passhash` varchar(128) NOT NULL, -- SHA2 512 non-binary (hex)
+  `salt` varchar(6)
 ) DEFAULT CHARSET=utf8mb4;
 
 -- DROP TABLE IF EXISTS salts;
-CREATE TABLE IF NOT EXISTS salts (
-  `user_id` int NOT NULL PRIMARY KEY,
-  `salt` varchar(6)
-) DEFAULT CHARSET=utf8;
+-- CREATE TABLE IF NOT EXISTS salts (
+--   `user_id` int NOT NULL PRIMARY KEY,
+--   `salt` varchar(6)
+-- ) DEFAULT CHARSET=utf8;
 
 -- DROP TABLE IF EXISTS relations;
 CREATE TABLE IF NOT EXISTS relations (
@@ -19,7 +20,8 @@ CREATE TABLE IF NOT EXISTS relations (
   `one` int NOT NULL,
   `another` int NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY `friendship` (`one`,`another`)
+  UNIQUE KEY `friendship` (`one`,`another`),
+  KEY `idx_one_another_created_at` (`one`, `another`, `created_at`)
 ) DEFAULT CHARSET=utf8;
 
 -- DROP TABLE IF EXISTS profiles;
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS entries (
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY `user_id` (`user_id`,`created_at`),
   KEY `created_at` (`created_at`)
+  KEY `idx_user_id_private_created_at` (`user_id`,`private`,`created_at`)
 ) DEFAULT CHARSET=utf8mb4;
 
 -- DROP TABLE IF EXISTS comments;
@@ -60,5 +63,6 @@ CREATE TABLE IF NOT EXISTS footprints (
   `id` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` int NOT NULL,
   `owner_id` int NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_user_id_owner_id_created_at` (`user_id`,`owner_id`,`created_at`)
 ) DEFAULT CHARSET=utf8;

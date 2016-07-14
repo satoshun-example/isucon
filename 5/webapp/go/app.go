@@ -99,8 +99,7 @@ func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) 
 	query := `
 SELECT u.id AS id, u.account_name AS account_name, u.nick_name AS nick_name, u.email AS email
 FROM users u
-JOIN salts s ON u.id = s.user_id
-WHERE u.email = ? AND u.passhash = SHA2(CONCAT(?, s.salt), 512)`
+WHERE u.email = ? AND u.passhash = SHA2(CONCAT(?, u.salt), 512)`
 	row := db.QueryRow(query, email, passwd)
 	user := User{}
 	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
@@ -147,9 +146,9 @@ func authenticated(w http.ResponseWriter, r *http.Request) *User {
 }
 
 func getUser(w http.ResponseWriter, userID int) *User {
-	row := db.QueryRow(`SELECT * FROM users WHERE id = ?`, userID)
+	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id = ?`, userID)
 	user := User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email, new(string))
+	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
 	if err == sql.ErrNoRows {
 		checkErr(ErrContentNotFound)
 	}
@@ -158,9 +157,9 @@ func getUser(w http.ResponseWriter, userID int) *User {
 }
 
 func getUserFromAccount(w http.ResponseWriter, name string) *User {
-	row := db.QueryRow(`SELECT * FROM users WHERE account_name = ?`, name)
+	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE account_name = ?`, name)
 	user := User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email, new(string))
+	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
 	if err == sql.ErrNoRows {
 		checkErr(ErrContentNotFound)
 	}
@@ -861,13 +860,14 @@ ORDER BY r.created_at DESC`, user.ID)
 	if err != sql.ErrNoRows {
 		checkErr(err)
 	}
-	friends := make([]FFriend, 0, 10)
+	defer rows.Close()
+
+	friends := make([]FFriend, 0, 100)
 	for rows.Next() {
 		var friend FFriend
 		checkErr(rows.Scan(&friend.CreatedAt, &friend.AccountName, &friend.NickName))
 		friends = append(friends, friend)
 	}
-	rows.Close()
 	render(w, r, http.StatusOK, "friends.html", struct{ Friends []FFriend }{friends})
 }
 

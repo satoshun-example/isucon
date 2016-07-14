@@ -18,16 +18,14 @@ class Command < Thor
 
     db = db()
     stmt = {}
-    stmt[:user] = db.prepare("INSERT INTO users (id,account_name,nick_name,email,passhash) VALUES (?,?,?,?,SHA2(CONCAT(?, ?), 512))")
-    stmt[:salt] = db.prepare("INSERT INTO salts (user_id,salt) VALUES (?,?)")
+    stmt[:user] = db.prepare("INSERT INTO users (id,account_name,nick_name,email,passhash,salt) VALUES (?,?,?,?,SHA2(CONCAT(?, ?), 512),?)")
     stmt[:prof] = db.prepare("INSERT INTO profiles (user_id,first_name,last_name,sex,birthday,pref) VALUES (?,?,?,?,?,?)")
 
     (1..users).each do |n|
       u = create_user(id: n)
       begin
         db.query("BEGIN".freeze)
-        stmt[:user].execute(u[:id],u[:account_name],u[:nick_name],u[:email],u[:password],u[:salt])
-        stmt[:salt].execute(u[:id],u[:salt])
+        stmt[:user].execute(u[:id],u[:account_name],u[:nick_name],u[:email],u[:password],u[:salt],u[:salt])
         stmt[:prof].execute(u[:id],u[:first_name],u[:last_name],u[:sex],u[:birthday],u[:pref])
         db.query("COMMIT".freeze)
         p u
