@@ -192,12 +192,7 @@ func permitted(w http.ResponseWriter, r *http.Request, userID int, anotherID int
 	return isFriend(w, r, anotherID)
 }
 
-func markFootprint(w http.ResponseWriter, r *http.Request, id int) {
-	user := getCurrentUser(w, r)
-	markFootprint2(user, id)
-}
-
-func markFootprint2(user *User, id int) {
+func markFootprint(user *User, id int) {
 	if user != nil && user.ID != id {
 		_, err := db.Exec(`INSERT INTO footprints (user_id, owner_id) VALUES (?,?)`, id, user.ID)
 		checkErr(err)
@@ -560,7 +555,7 @@ func GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 
-	markFootprint(w, r, owner.ID)
+	markFootprint(user, owner.ID)
 
 	render(w, r, http.StatusOK, "profile.html", struct {
 		Owner       User
@@ -664,7 +659,7 @@ LIMIT 20`
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		markFootprint(w, r, owner.ID)
+		markFootprint(user, owner.ID)
 	}()
 
 	wg.Wait()
@@ -743,7 +738,7 @@ WHERE c.entry_id = ?`, entry.ID)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		markFootprint2(user, owner.id)
+		markFootprint(user, owner.id)
 	}()
 
 	wg.Wait()
