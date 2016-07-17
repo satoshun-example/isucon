@@ -125,13 +125,20 @@ func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
 	if !ok || userID == nil {
 		return nil
 	}
+
+	user, ok := fromID(userID.(int))
+	if ok {
+		return &user
+	}
+
 	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id=?`, userID)
-	user := User{}
+	user = User{}
 	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
 	if err == sql.ErrNoRows {
 		checkErr(ErrAuthentication)
 	}
 	checkErr(err)
+	setUser(user)
 	context.Set(r, "user", user)
 	return &user
 }
@@ -146,6 +153,16 @@ func authenticated(w http.ResponseWriter, r *http.Request) *User {
 }
 
 func getUser(w http.ResponseWriter, userID int) *User {
+	user, ok := fromID(userID)
+	if !ok {
+		user = getUserInternal(w, userID)
+		setUser(user)
+	}
+
+	return &user
+}
+
+func getUserInternal(w http.ResponseWriter, userID int) User {
 	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id = ?`, userID)
 	user := User{}
 	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
@@ -153,17 +170,24 @@ func getUser(w http.ResponseWriter, userID int) *User {
 		checkErr(ErrContentNotFound)
 	}
 	checkErr(err)
-	return &user
+	return user
 }
 
 func getUserFromAccount(w http.ResponseWriter, name string) *User {
+	user, ok := fromAccount(name)
+	if ok {
+		return &user
+	}
+
 	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE account_name = ?`, name)
-	user := User{}
+	user = User{}
 	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
 	if err == sql.ErrNoRows {
 		checkErr(ErrContentNotFound)
 	}
 	checkErr(err)
+	setUser(user)
+
 	return &user
 }
 
