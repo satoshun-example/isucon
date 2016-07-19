@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha512"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -39,10 +40,12 @@ var (
 )
 
 type User struct {
-	ID          int
-	AccountName string
-	NickName    string
-	Email       string
+	ID           int
+	AccountName  string
+	NickName     string
+	Email        string
+	Salt         string
+	PasswordHash string
 }
 
 type Profile struct {
@@ -96,19 +99,18 @@ var (
 )
 
 func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) {
-	query := `
-SELECT u.id AS id, u.account_name AS account_name, u.nick_name AS nick_name, u.email AS email
-FROM users u
-WHERE u.email = ? AND u.passhash = SHA2(CONCAT(?, u.salt), 512)`
-	row := db.QueryRow(query, email, passwd)
-	user := User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			checkErr(ErrAuthentication)
-		}
-		checkErr(err)
+	user, ok := fromEmail(email)
+	if !ok {
+		checkErr(ErrAuthentication)
 	}
+
+	s := sha512.New()
+	s.Write([]byte(passwd + user.Salt))
+	sha := fmt.Sprintf("%x", s.Sum(nil))
+	if user.PasswordHash != sha {
+		checkErr(ErrAuthentication)
+	}
+
 	session := getSession(w, r)
 	session.Values["user_id"] = user.ID
 	session.Save(r, w)
@@ -128,19 +130,12 @@ func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
 
 	user, ok := fromID(userID.(int))
 	if ok {
-		return &user
+		return user
 	}
 
-	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id=?`, userID)
-	user = User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
-	if err == sql.ErrNoRows {
-		checkErr(ErrAuthentication)
-	}
-	checkErr(err)
-	setUser(user)
+	user = getUserInternal(w, userID.(int))
 	context.Set(r, "user", user)
-	return &user
+	return user
 }
 
 func authenticated(w http.ResponseWriter, r *http.Request) *User {
@@ -156,13 +151,12 @@ func getUser(w http.ResponseWriter, userID int) *User {
 	user, ok := fromID(userID)
 	if !ok {
 		user = getUserInternal(w, userID)
-		setUser(user)
 	}
 
-	return &user
+	return user
 }
 
-func getUserInternal(w http.ResponseWriter, userID int) User {
+func getUserInternal(w http.ResponseWriter, userID int) *User {
 	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id = ?`, userID)
 	user := User{}
 	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
@@ -170,25 +164,24 @@ func getUserInternal(w http.ResponseWriter, userID int) User {
 		checkErr(ErrContentNotFound)
 	}
 	checkErr(err)
-	return user
+	return &user
 }
 
 func getUserFromAccount(w http.ResponseWriter, name string) *User {
 	user, ok := fromAccount(name)
 	if ok {
-		return &user
+		return user
 	}
 
 	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE account_name = ?`, name)
-	user = User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
+	u := User{}
+	err := row.Scan(&u.ID, &u.AccountName, &u.NickName, &u.Email)
 	if err == sql.ErrNoRows {
 		checkErr(ErrContentNotFound)
 	}
 	checkErr(err)
-	setUser(user)
 
-	return &user
+	return &u
 }
 
 func isFriend(w http.ResponseWriter, r *http.Request, anotherID int) bool {
@@ -922,8 +915,14 @@ func main() {
 	}
 	defer db.Close()
 
-	// pool = newRedisPool("/tmp/redis.sock", 100)
-	// defer pool.Close()
+	//	load users
+	rows, _ := db.Query(`SELECT id, account_name, nick_name, email, passhash, salt FROM users`)
+	for rows.Next() {
+		var user User
+		rows.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email, &user.PasswordHash, &user.Salt)
+		unsafeSetUser(user)
+	}
+	rows.Close()
 
 	ssecret := os.Getenv("ISUCON5_SESSION_SECRET")
 	if ssecret == "" {
