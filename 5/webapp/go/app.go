@@ -128,12 +128,8 @@ func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
 		return nil
 	}
 
-	user, ok := fromID(userID.(int))
-	if ok {
-		return user
-	}
+	user, _ := fromID(userID.(int))
 
-	user = getUserInternal(w, userID.(int))
 	context.Set(r, "user", user)
 	return user
 }
@@ -148,40 +144,13 @@ func authenticated(w http.ResponseWriter, r *http.Request) *User {
 }
 
 func getUser(w http.ResponseWriter, userID int) *User {
-	user, ok := fromID(userID)
-	if !ok {
-		user = getUserInternal(w, userID)
-	}
-
+	user, _ := fromID(userID)
 	return user
 }
 
-func getUserInternal(w http.ResponseWriter, userID int) *User {
-	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE id = ?`, userID)
-	user := User{}
-	err := row.Scan(&user.ID, &user.AccountName, &user.NickName, &user.Email)
-	if err == sql.ErrNoRows {
-		checkErr(ErrContentNotFound)
-	}
-	checkErr(err)
-	return &user
-}
-
 func getUserFromAccount(w http.ResponseWriter, name string) *User {
-	user, ok := fromAccount(name)
-	if ok {
-		return user
-	}
-
-	row := db.QueryRow(`SELECT id, account_name, nick_name, email FROM users WHERE account_name = ?`, name)
-	u := User{}
-	err := row.Scan(&u.ID, &u.AccountName, &u.NickName, &u.Email)
-	if err == sql.ErrNoRows {
-		checkErr(ErrContentNotFound)
-	}
-	checkErr(err)
-
-	return &u
+	user, _ := fromAccount(name)
+	return user
 }
 
 func isFriend(w http.ResponseWriter, r *http.Request, anotherID int) bool {
@@ -314,11 +283,6 @@ type FriendComment struct {
 	CreatedAt   time.Time
 }
 
-type FriendCommentData struct {
-	NickName    string
-	AccountName string
-}
-
 func GetIndex(w http.ResponseWriter, r *http.Request) {
 	user := authenticated(w, r)
 	if user == nil {
@@ -428,7 +392,7 @@ LIMIT 10`, user.ID)
 
 	wg.Add(1)
 	commentsOfFriends := make([]FriendComment, 0, 10)
-	commentsOfFriendsData := make(map[int]FriendCommentData)
+	commentsOfFriendsData := make(map[int]User)
 	go func() {
 		defer wg.Done()
 
@@ -448,7 +412,7 @@ LIMIT 10`, user.ID)
 			checkErr(err)
 		}
 
-		ids := make(map[int]struct{})
+		ids := make([]int, 0, 20)
 		for rows.Next() {
 			c := FriendComment{}
 			checkErr(rows.Scan(
@@ -457,34 +421,15 @@ LIMIT 10`, user.ID)
 
 			commentsOfFriends = append(commentsOfFriends, c)
 
-			ids[c.UserID] = struct{}{}
-			ids[c.EntryUserID] = struct{}{}
+			ids = append(ids, c.UserID, c.EntryUserID)
 		}
 
 		rows.Close()
 
-		keys := make([]string, 0, len(ids))
-		for key := range ids {
-			keys = append(keys, strconv.Itoa(key))
+		for _, id := range ids {
+			data, _ := fromID(id)
+			commentsOfFriendsData[id] = *data
 		}
-
-		rows, err = db.Query(fmt.Sprintf(`
-SELECT id, nick_name, account_name
-FROM users
-WHERE id IN (%s)`, strings.Join(keys, ",")))
-
-		if err != sql.ErrNoRows {
-			checkErr(err)
-		}
-
-		for rows.Next() {
-			var id int
-			var data FriendCommentData
-			checkErr(rows.Scan(&id, &data.NickName, &data.AccountName))
-			commentsOfFriendsData[id] = data
-		}
-
-		rows.Close()
 	}()
 
 	wg.Add(1)
@@ -529,7 +474,7 @@ LIMIT 10`, user.ID)
 		CommentsForMe         []IComment
 		EntriesOfFriends      []IEntry
 		CommentsOfFriends     []FriendComment
-		CommentsOfFriendsData map[int]FriendCommentData
+		CommentsOfFriendsData map[int]User
 		Friends               int
 		Footprints            []IFootPrint
 	}{
@@ -915,7 +860,7 @@ func main() {
 	}
 	defer db.Close()
 
-	//	load users
+	// load users
 	rows, _ := db.Query(`SELECT id, account_name, nick_name, email, passhash, salt FROM users`)
 	for rows.Next() {
 		var user User
